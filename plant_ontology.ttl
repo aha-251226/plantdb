@@ -1,0 +1,52 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix plant: <http://plantcheck.org/ontology#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+plant:Flow a owl:Class ;
+    rdfs:label "Flow" ;
+    rdfs:subClassOf plant:Property .
+
+plant:Instrument a owl:Class ;
+    rdfs:label "Instrument" ;
+    rdfs:subClassOf plant:Equipment .
+
+plant:Level a owl:Class ;
+    rdfs:label "Level" ;
+    rdfs:subClassOf plant:Property .
+
+plant:Operation a owl:Class ;
+    rdfs:label "Operation" .
+
+plant:Pipe a owl:Class ;
+    rdfs:label "Pipe" ;
+    rdfs:subClassOf plant:Equipment .
+
+plant:Pressure a owl:Class ;
+    rdfs:label "Pressure" ;
+    rdfs:subClassOf plant:Property .
+
+plant:Pump a owl:Class ;
+    rdfs:label "Pump" ;
+    rdfs:subClassOf plant:Equipment .
+
+plant:Tank a owl:Class ;
+    rdfs:label "Tank" ;
+    rdfs:subClassOf plant:Equipment .
+
+plant:Temperature a owl:Class ;
+    rdfs:label "Temperature" ;
+    rdfs:subClassOf plant:Property .
+
+plant:Valve a owl:Class ;
+    rdfs:label "Valve" ;
+    rdfs:subClassOf plant:Equipment .
+
+plant:d rdfs:label "d" ;
+    rdfs:seeAlso plant:diameter .
+
+plant:dia rdfs:label "dia" ;
+    rdfs:seeAlso plant:diameter .
+
+plant:diam rdfs:label "diam" ;
+    rdfs:seeAlso plant:diameter .
+

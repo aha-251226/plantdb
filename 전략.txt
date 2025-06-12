@@ -1,0 +1,138 @@
+# 📘 하이브리드 PDF-to-DB 데이터 파이프라인 전략 (최종 보강판)
+
+이 문서는 플랜트 PDF 문서로부터 데이터를 추출하고, DuckDB에 저장하며, 사용자 개입과 GPT 검토를 통합한 **하이브리드 데이터 처리 시스템 전략**을 정의합니다. 특히 PDF 테이블 추출 정확도와 데이터 구조화 신뢰성을 **모두 강화한 이중 안전 구조**를 갖습니다.
+
+---
+
+## 🎯 시스템 목표
+
+- PDF에서 플랜트 사양표, 구성표, 리비전 정보를 자동 추출 (OCR 보완 포함)
+- 필드 구조화 정확도 보장: 수동 보완 + GPT 추천 + 검증 인터페이스
+- DuckDB 저장 및 CSV 백업
+- 자연어 질의 지원
+- 관계형 탐색 및 재귀 쿼리 실행
+- 시각화 출력 포함
+
+---
+
+## 전체 9단계 시스템 흐름 (PDF 추출 및 구조화 이중 강화 포함)
+
+### 1. PDF 테이블 추출 (강화됨)
+- 기능: PDF 내 모든 페이지의 테이블 자동 탐색 및 추출 (누락 방지)
+- 추가 전략:
+  - `pdfplumber`와 `Camelot(lattice)` 병렬 시도
+  - OCR fallback (Tesseract 또는 Textract)
+  - 페이지별 테이블 유무 로그 기록
+- 자동화 수준: 완전 자동
+- GPT 역할: 없음
+- 기술: `pdfplumber`, `Camelot`, `ocrmypdf`, `textract`
+
+### 2. 테이블 유형 분류
+- 기능: 추출된 테이블을 의미별로 분류 (예: project_meta, others 등)
+- 자동화 수준: 반자동 (GPT 제안 + 사용자 확인)
+- GPT 역할: 테이블 타입 추천 및 근거 설명
+- 기술: 키워드 기반 분류 + GPT 유사도 판단
+
+### 3. 필드 헤더 매핑 (구조화 핵심 강화)
+- 기능: 테이블 헤더 → DB 컬럼명 매핑
+- 강화 전략:
+  - 사전 정의된 FIELD_MAP 우선
+  - GPT 후보 제안 + 사용자 선택
+  - 매핑 실패 시 수동 확인 창 띄움
+- GPT 역할: 매핑 제안 및 근거 설명
+- 기술: `manual_map`, GPT-4o API
+
+### 4. 필수 필드 검증
+- 기능: 필수값(job_no, doc_no 등) 누락 여부 확인 및 알림
+- 강화 전략: 누락 시 저장 중단 + 수동 입력 요청
+- GPT 역할: 누락 필드의 중요성 설명
+- 기술: 조건 검사 + UI 오류 경고
+
+### 5. 사용자 검토 UI
+- 기능: 저장 전 테이블 구조 확인 및 수동 수정 가능
+- 추가 전략:
+  - 의심값 자동 강조 (예: null 또는 단위 오류)
+  - 저장 전 최종 승인 버튼 요구
+- GPT 역할: 이상값 경고 메시지 생성
+- 기술: Dash 기반 UI
+
+### 6. DuckDB 저장 및 CSV 백업
+- 기능: 확정된 데이터 DB에 저장 및 동시에 CSV 자동 백업
+- 자동화 수준: 완전 자동 (단, 승인 이후에만 실행)
+- 기술: `duckdb`, `pandas.to_csv()`
+
+### 7. 자연어 질의 → SQL 변환
+- 기능: 사용자의 질의를 SQL로 자동 변환
+- GPT 역할: SQL 제안 및 키워드-컬럼 매핑 설명
+- 기술: 키워드 템플릿 기반 + GPT 보완
+
+### 8. 재귀 쿼리 실행
+- 기능: 구성요소/리비전의 계층 관계 추적
+- 기술: DuckDB `WITH RECURSIVE`
+- 예시:
+```sql
+WITH RECURSIVE rev_tree(id, revision, parent_revision) AS (
+    SELECT id, revision, NULL FROM revision_history WHERE revision = 'A'
+    UNION ALL
+    SELECT rh.id, rh.revision, rt.revision
+    FROM revision_history rh
+    JOIN rev_tree rt ON rh.previous_revision = rt.revision
+)
+SELECT * FROM rev_tree;
+```
+
+### 9. 시각화 출력
+- 기능: 관계형 구조나 계층형 데이터를 시각적으로 표현
+- 기술: `plotly`, `dash_cytoscape`, `networkx`
+
+---
+
+## GPT의 역할 정의
+- 테이블 분류 추천 및 설명 제공
+- 헤더 매핑 후보 제안 (사전 기반 실패 시)
+- 필수 누락 필드 설명
+- 자연어 질의 → SQL 변환 및 근거 설명
+- 데이터 이상 감지 시 설명과 강조
+
+GPT는 반드시 **사용자 승인 이후 반영**되며, 직접 자동 저장/실행하지 않습니다.
+
+---
+
+## 사람 개입 지점
+- 테이블 유형 수동 확인
+- 필드 매핑 확정 또는 수동 입력
+- 필수 필드 누락 시 직접 입력
+- 저장 전 구조 확인 및 승인 필수
+
+---
+
+## 출력물
+- DuckDB DB 파일 (`plant_data.duckdb`)
+- CSV 백업 파일 (`exported_csv/*.csv`)
+- 시각화 구조 이미지 또는 JSON 형태
+
+---
+
+## 사용 기술 스택
+
+| 구성 요소 | 기술 |
+|------------|------|
+| PDF 추출 | pdfplumber, Camelot, ocrmypdf, textract |
+| 데이터 전처리 | pandas, json |
+| DB 저장 | duckdb |
+| GPT 보조 | OpenAI GPT-4o API |
+| UI | Dash |
+| 시각화 | plotly, dash_cytoscape, networkx |
+| 재귀 탐색 | WITH RECURSIVE (DuckDB) |
+
+---
+
+## 구현 순서 제안
+
+1. PDF 테이블 추출 다중 전략 구현 (stream, lattice, OCR fallback)
+2. 테이블 분류 알고리즘 + GPT 추천 추가
+3. 필드 매핑 수동 확인 UI + GPT 보조
+4. 필수값 검증 및 수동 입력 인터페이스 구축
+5. DB 저장 로직 + CSV 동시 백업 구축
+6. 자연어 → SQL 처리기 구현 (GPT 제안 포함)
+7. 재귀 쿼리 실행 기능 및 시각화 구조 연결

@@ -1,0 +1,330 @@
+@prefix :       <http://example.org/plant#> .
+@prefix ex:     <http://example.org/plant#> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:    <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+
+################################################################################
+# 클래스 정의
+################################################################################
+ex:Project             a owl:Class .
+ex:Equipment           a owl:Class .
+ex:ProcessRequirement  a owl:Class .
+ex:Other               a owl:Class .
+ex:Revision            a owl:Class .
+ex:Note                a owl:Class .
+ex:FeedType            a owl:Class .
+ex:ConditionType       a owl:Class .
+ex:Person              a owl:Class .
+
+################################################################################
+# 객체 속성(ObjectProperties)
+################################################################################
+ex:hasEquipment      a owl:ObjectProperty ;
+    rdfs:domain      ex:Project ;
+    rdfs:range       ex:Equipment .
+
+ex:hasProcessReq     a owl:ObjectProperty ;
+    rdfs:domain      ex:Equipment ;
+    rdfs:range       ex:ProcessRequirement .
+
+ex:hasOther          a owl:ObjectProperty ;
+    rdfs:domain      ex:Equipment ;
+    rdfs:range       ex:Other .
+
+ex:hasRevision       a owl:ObjectProperty ;
+    rdfs:domain      ex:Equipment ;
+    rdfs:range       ex:Revision .
+
+ex:hasNote           a owl:ObjectProperty ;
+    rdfs:domain      ex:Other ;
+    rdfs:range       ex:Note .
+
+ex:hasFeedType       a owl:ObjectProperty ;
+    rdfs:domain      ex:ProcessRequirement ;
+    rdfs:range       ex:FeedType .
+
+ex:hasCondition      a owl:ObjectProperty ;
+    rdfs:domain      ex:ProcessRequirement ;
+    rdfs:range       ex:ConditionType .
+
+ex:reviewedBy        a owl:ObjectProperty ;
+    rdfs:domain      ex:Revision ;
+    rdfs:range       ex:Person .
+
+################################################################################
+# 데이터 속성(DatatypeProperties)
+################################################################################
+ex:jobNo             a owl:DatatypeProperty ; rdfs:domain ex:Project ; rdfs:range xsd:string .
+ex:projectName       a owl:DatatypeProperty ; rdfs:domain ex:Project ; rdfs:range xsd:string .
+ex:docNo             a owl:DatatypeProperty ; rdfs:domain ex:Project ; rdfs:range xsd:string .
+ex:itemNo            a owl:DatatypeProperty ; rdfs:domain ex:Equipment ; rdfs:range xsd:string .
+ex:client            a owl:DatatypeProperty ; rdfs:domain ex:Project ; rdfs:range xsd:string .
+ex:service           a owl:DatatypeProperty ; rdfs:domain ex:Project ; rdfs:range xsd:string .
+ex:pageCount         a owl:DatatypeProperty ; rdfs:domain ex:Project ; rdfs:range xsd:integer .
+ex:revisionCount     a owl:DatatypeProperty ; rdfs:domain ex:Project ; rdfs:range xsd:integer .
+
+ex:pumpType          a owl:DatatypeProperty ; rdfs:domain ex:Equipment ; rdfs:range xsd:string .
+ex:driverType        a owl:DatatypeProperty ; rdfs:domain ex:Equipment ; rdfs:range xsd:string .
+ex:numberRequired    a owl:DatatypeProperty ; rdfs:domain ex:Equipment ; rdfs:range xsd:string .
+ex:dutyType          a owl:DatatypeProperty ; rdfs:domain ex:Equipment ; rdfs:range xsd:string .
+
+ex:value             a owl:DatatypeProperty ; rdfs:domain ex:ProcessRequirement ; rdfs:range xsd:decimal .
+ex:conditionType     a owl:DatatypeProperty ; rdfs:domain ex:ProcessRequirement ; rdfs:range xsd:string .
+
+ex:casingClass       a owl:DatatypeProperty ; rdfs:domain ex:Other ; rdfs:range xsd:string .
+ex:estimatedShutoff  a owl:DatatypeProperty ; rdfs:domain ex:Other ; rdfs:range xsd:decimal .
+
+ex:revisionNumber    a owl:DatatypeProperty ; rdfs:domain ex:Revision ; rdfs:range xsd:string .
+ex:revisionDate      a owl:DatatypeProperty ; rdfs:domain ex:Revision ; rdfs:range xsd:date .
+ex:byChecked         a owl:DatatypeProperty ; rdfs:domain ex:Revision ; rdfs:range xsd:string .
+
+ex:noteText          a owl:DatatypeProperty ; rdfs:domain ex:Note ; rdfs:range xsd:string .
+
+################################################################################
+# FeedType 인스턴스
+################################################################################
+ex:AM_Feed   a ex:FeedType ; rdfs:label "AM Feed"@en .
+ex:AH_Feed   a ex:FeedType ; rdfs:label "AH Feed"@en .
+
+################################################################################
+# ConditionType 인스턴스
+################################################################################
+ex:Normal    a ex:ConditionType ; rdfs:label "Normal"@en .
+ex:Maximum   a ex:ConditionType ; rdfs:label "Maximum"@en .
+ex:Minimum   a ex:ConditionType ; rdfs:label "Minimum"@en .
+ex:Rated     a ex:ConditionType ; rdfs:label "Rated"@en .
+
+################################################################################
+# 인스턴스 예시
+################################################################################
+
+# 1) 프로젝트
+ex:Project_7T04
+    a ex:Project ;
+    ex:jobNo        "7T04" ;
+    ex:projectName  "Centrifugal Pump Process Data" ;
+    ex:docNo        "7T04-PR-21-DS-505" ;
+    ex:client       "Yonsei" ;
+    ex:service      "Service Overflash Pumps" ;
+    ex:pageCount    1 ;
+    ex:revisionCount 14 ;
+    ex:hasEquipment ex:Pump_P2105 .
+
+# 2) 장비(펌프)
+ex:Pump_P2105
+    a ex:Equipment ;
+    ex:itemNo         "P-2105 A/B" ;
+    ex:pumpType       "CENTRIFUGAL" ;
+    ex:driverType     "MOTOR / MOTOR" ;
+    ex:numberRequired "ONE / ONE (NOTE 3)" ;
+    ex:dutyType       "CONTINUOUS" ;
+    ex:hasProcessReq  ex:PR_Temp_AM_Normal, ex:PR_Temp_AM_Maximum,
+                      ex:PR_Vapor_AM_Normal, ex:PR_Vapor_AH_Normal,
+                      ex:PR_SG_AM_Normal,    ex:PR_SG_AH_Normal,
+                      ex:PR_Viscosity_Normal,
+                      ex:PR_Capacity_AM_Normal, ex:PR_Capacity_AH_Normal,
+                      ex:PR_Suction_AM_Rated,   ex:PR_Discharge_Rated,
+                      ex:PR_DiffPressure_Rated, ex:PR_DiffHead_Rated,
+                      ex:PR_NPSH,               ex:PR_Corrosion_AM,
+                      ex:PR_Corrosion_AH,       ex:PR_Solid_Size,
+                      ex:PR_Solid_WT ;
+    ex:hasOther       ex:Other1 ;
+    ex:hasRevision    ex:Rev14 .
+
+# 3) ProcessRequirement: Temperature
+ex:PR_Temp_AM_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        384 ;
+    rdfs:label      "Pumping Temp Normal (AM Feed)"@en .
+
+ex:PR_Temp_AM_Maximum
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Maximum ;
+    ex:value        384 ;
+    rdfs:label      "Pumping Temp Maximum (AM Feed)"@en .
+
+ex:PR_Temp_AM_Minimum
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Minimum ;
+    ex:value        "" ;
+    rdfs:label      "Pumping Temp Minimum (AM Feed)"@en .
+
+# 4) Vapor Pressure
+ex:PR_Vapor_AM_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        0.071 ;
+    rdfs:label      "Vapor Pressure Normal (AM Feed)"@en .
+
+ex:PR_Vapor_AH_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AH_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        0.073 ;
+    rdfs:label      "Vapor Pressure Normal (AH Feed)"@en .
+
+# --- Pumping Temperature (℃) for AH Feed Maximum & Minimum ---
+ex:PR_Temp_AH_Maximum
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AH_Feed ;
+    ex:hasCondition ex:Maximum ;
+    ex:value        384 ;
+    rdfs:label      "Pumping Temp Maximum (AH Feed)"@en .
+
+ex:PR_Temp_AH_Minimum
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AH_Feed ;
+    ex:hasCondition ex:Minimum ;
+    ex:value        "" ;
+    rdfs:label      "Pumping Temp Minimum (AH Feed)"@en .
+
+# --- Vapor Pressure (kg/cm2A) – AM & AH Feed Maximum ---
+ex:PR_Vapor_AM_Maximum
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Maximum ;
+    ex:value        "" ;
+    rdfs:label      "Vapor Pressure Maximum (AM Feed)"@en .
+
+ex:PR_Vapor_AH_Maximum
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AH_Feed ;
+    ex:hasCondition ex:Maximum ;
+    ex:value        "" ;
+    rdfs:label      "Vapor Pressure Maximum (AH Feed)"@en .
+
+# 5) Specific Gravity
+ex:PR_SG_AM_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        0.777 ;
+    rdfs:label      "Specific Gravity Normal (AM Feed)"@en .
+
+ex:PR_SG_AH_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AH_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        0.777 ;
+    rdfs:label      "Specific Gravity Normal (AH Feed)"@en .
+
+# 6) Viscosity
+ex:PR_Viscosity_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed, ex:AH_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        1.0 ;
+    rdfs:label      "Viscosity (cP)"@en .
+
+# 7) Capacity
+ex:PR_Capacity_AM_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        71.1 ;
+    rdfs:label      "Capacity Normal (AM Feed)"@en .
+
+ex:PR_Capacity_AH_Normal
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AH_Feed ;
+    ex:hasCondition ex:Normal ;
+    ex:value        70.4 ;
+    rdfs:label      "Capacity Normal (AH Feed)"@en .
+
+# 8) Suction & Discharge & Differential
+ex:PR_Suction_AM_Rated
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        1.0 ;
+    rdfs:label      "Suction Pressure Rated (AM Feed)"@en .
+
+ex:PR_Discharge_Rated
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed, ex:AH_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        17.1 ;
+    rdfs:label      "Discharge Pressure Rated Flow"@en .
+
+ex:PR_DiffPressure_Rated
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed, ex:AH_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        16.1 ;
+    rdfs:label      "Differential Pressure"@en .
+
+ex:PR_DiffHead_Rated
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed, ex:AH_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        207 ;
+    rdfs:label      "Differential Head"@en .
+
+ex:PR_NPSH
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed, ex:AH_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        ">8" ;
+    rdfs:label      "NPSH Available"@en .
+
+# 9) Corrosion/Erosion
+ex:PR_Corrosion_AM
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        "Sulfur (3.26 wt%)" ;
+    rdfs:label      "Corrosion/Erosion (AM Feed)"@en .
+
+ex:PR_Corrosion_AH
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AH_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        "Sulfur (3.25 wt%)" ;
+    rdfs:label      "Corrosion/Erosion (AH Feed)"@en .
+
+# 10) Solid
+ex:PR_Solid_Size
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed, ex:AH_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        "" ;
+    rdfs:label      "Solid Size"@en .
+
+ex:PR_Solid_WT
+    a ex:ProcessRequirement ;
+    ex:hasFeedType  ex:AM_Feed, ex:AH_Feed ;
+    ex:hasCondition ex:Rated ;
+    ex:value        "" ;
+    rdfs:label      "Solid WT%"@en .
+
+# 11) Others
+ex:Other1
+    a ex:Other ;
+    ex:casingClass        "API CLASS A-8 (HOLD)" ;
+    ex:estimatedShutoff   27.0 ;
+    ex:hasNote            ex:Note3 .
+
+# 12) Revision
+ex:Rev14
+    a ex:Revision ;
+    ex:revisionNumber     "14" ;
+    ex:revisionDate       "2012-12-26"^^xsd:date ;
+    ex:byChecked          "HJL / SKL" ;
+    ex:reviewedBy         ex:Person_HJL, ex:Person_SKL .
+
+# 13) Person
+ex:Person_HJL   a ex:Person ; rdfs:label "HJL"@en .
+ex:Person_SKL   a ex:Person ; rdfs:label "SKL"@en .
+
+# 14) Note
+ex:Note3
+    a ex:Note ;
+    ex:noteText    "ONE STAND-BY : ONE (NOTE 3)" .
+

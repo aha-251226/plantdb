@@ -1,0 +1,1330 @@
+import os
+import base64
+import json
+import pandas as pd
+import networkx as nx
+import plotly.graph_objects as go
+from dash import Dash, dcc, html, Input, Output, State
+import dash_bootstrap_components as dbc
+from collections import Counter
+import tempfile
+import re
+
+# PDF 처리 라이브러리 (선택적)
+try:
+    from pdfminer.high_level import extract_text
+    PDF_AVAILABLE = True
+except ImportError:
+    print("PDFMiner not available - using mock text extraction")
+    PDF_AVAILABLE = False
+
+# PDF 텍스트 추출 함수
+def extract_pdf_text(pdf_path):
+    """PDF에서 텍스트 추출"""
+    if PDF_AVAILABLE:
+        try:
+            return extract_text(pdf_path)
+        except Exception as e:
+            print(f"PDF extraction error: {e}")
+            return "Error extracting PDF text"
+    else:
+        # Mock 텍스트 반환
+        return """Industrial Equipment Specification
+        Project: 7T04 - Centrifugal Pump Process Data
+        Equipment ID: P-2105 A/B
+        Pump Type: CENTRIFUGAL
+        Driver Type: MOTOR / MOTOR
+        Capacity: 71.1 m3/h (AM Feed)
+        Temperature: 384 ℃
+        Pressure: 17.1 kg/cm2A
+        Viscosity: 1.0 cP
+        Revision: 14
+        Checked by: HJL / SKL
+        Date: 2012-12-26"""
+
+# 온톨로지 클래스 (대폭 강화된 버전)
+class AdvancedOntologyLearner:
+    def __init__(self):
+        # 기본 온톨로지 스키마
+        self.classes = {"Project", "Equipment", "ProcessRequirement", "Person", "Document", "Revision", "Note"}
+        self.object_properties = {"hasEquipment", "hasProcessReq", "reviewedBy", "hasProject", "hasValue", "hasRevision", "hasNote"}
+        self.datatype_properties = {"jobNo", "itemNo", "value", "noteText", "revisionNumber", "revisionDate"}
+        
+        # 학습된 패턴 저장소
+        self.learned_patterns = {}
+        self.entity_instances = {}
+        self.confidence_scores = {}
+        
+        # 도메인 특화 키워드
+        self.domain_keywords = {
+            "Project": ["job", "project", "doc", "document", "specification", "drawing"],
+            "Equipment": ["pump", "motor", "driver", "centrifugal", "equipment", "vessel", "tank"],
+            "ProcessRequirement": ["temperature", "pressure", "capacity", "flow", "viscosity", "density"],
+            "Person": ["checked", "reviewed", "approved", "by", "engineer", "manager"],
+            "Revision": ["revision", "rev", "version", "updated", "modified"],
+            "Note": ["note", "remark", "comment", "description"]
+        }
+        
+        # 단위 및 측정값 패턴
+        self.unit_patterns = {
+            "temperature": ["℃", "°C", "°F", "K"],
+            "pressure": ["kg/cm2", "bar", "psi", "Pa", "kPa", "MPa"],
+            "flow": ["m3/h", "l/min", "gpm", "bph"],
+            "viscosity": ["cP", "Pa·s", "cSt"],
+            "length": ["mm", "cm", "m", "in", "ft"],
+            "percentage": ["%"]
+        }
+        
+    def learn_from_text(self, text):
+        print("🧠 Advanced ontology learning from text...")
+        
+        # 1. 기본 패턴 추출
+        basic_patterns = self._extract_basic_patterns(text)
+        
+        # 2. 컨텍스트 기반 엔티티 인식
+        contextual_entities = self._extract_contextual_entities(text)
+        
+        # 3. 관계 추출
+        relations = self._extract_relations(text, contextual_entities)
+        
+        # 4. 신뢰도 계산
+        confidence_scores = self._calculate_confidence(basic_patterns, contextual_entities)
+        
+        # 5. 온톨로지 매칭
+        ontology_matches = self._match_to_ontology(contextual_entities)
+        
+        # 6. 학습 결과 저장
+        self._update_learned_knowledge(basic_patterns, contextual_entities, relations)
+        
+        results = {
+            "patterns": basic_patterns,
+            "new_entities": contextual_entities,
+            "new_relations": relations,
+            "matched_entities": ontology_matches,
+            "confidence_scores": confidence_scores,
+            "domain_insights": self._generate_domain_insights(text)
+        }
+        
+        print(f"📊 Enhanced learning completed:")
+        print(f"   - Patterns: {len(basic_patterns)} types")
+        print(f"   - Entities: {sum(len(v) for v in contextual_entities.values())} total")
+        print(f"   - Relations: {len(relations)} identified")
+        print(f"   - Avg Confidence: {sum(confidence_scores.values())/len(confidence_scores) if confidence_scores else 0:.2f}")
+        
+        return results
+    
+    def _extract_basic_patterns(self, text):
+        """기본 패턴 추출 (향상된 정규표현식)"""
+        patterns = {}
+        
+        # 프로젝트/문서 번호 패턴
+        project_patterns = [
+            r'(?:Job\s*No\.?\s*:?\s*)([A-Z0-9]{2,}(?:-[A-Z0-9]+)*)',
+            r'(?:Project\s*:?\s*)([A-Z0-9]{2,}(?:\s+[A-Z0-9]+)*)',
+            r'(?:Doc\.?\s*No\.?\s*:?\s*)([A-Z0-9]{2,}(?:-[A-Z0-9]+)*)',
+            r'\b([A-Z]\d+[A-Z]?\d*)\b'
+        ]
+        
+        project_ids = []
+        for pattern in project_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            project_ids.extend(matches)
+        
+        if project_ids:
+            patterns["project_ids"] = list(set(project_ids))
+        
+        # 장비 식별자 패턴
+        equipment_patterns = [
+            r'([A-Z]-\d+(?:\s*[A-Z](?:/[A-Z])?)?)',
+            r'([A-Z]{2,3}-\d+)',
+            r'([A-Z]\d{3,}[A-Z]?)'
+        ]
+        
+        equipment_ids = []
+        for pattern in equipment_patterns:
+            matches = re.findall(pattern, text)
+            equipment_ids.extend(matches)
+        
+        if equipment_ids:
+            patterns["equipment_ids"] = list(set(equipment_ids))
+        
+        # 향상된 수치 값 패턴
+        numerical_patterns = []
+        for unit_type, units in self.unit_patterns.items():
+            for unit in units:
+                pattern = rf'(\d+\.?\d*)\s*{re.escape(unit)}'
+                matches = re.findall(pattern, text)
+                for match in matches:
+                    numerical_patterns.append((match, unit, unit_type))
+        
+        if numerical_patterns:
+            patterns["numerical_values"] = numerical_patterns
+        
+        # 사람 이름/이니셜 패턴
+        person_contexts = [
+            r'(?:Checked\s+by\s*:?\s*)([A-Z]{2,4}(?:\s*/\s*[A-Z]{2,4})*)',
+            r'(?:Reviewed\s+by\s*:?\s*)([A-Z]{2,4}(?:\s*/\s*[A-Z]{2,4})*)',
+            r'(?:Approved\s+by\s*:?\s*)([A-Z]{2,4}(?:\s*/\s*[A-Z]{2,4})*)',
+            r'(?:By\s*:?\s*)([A-Z]{2,4}(?:\s*/\s*[A-Z]{2,4})*)'
+        ]
+        
+        person_names = []
+        for pattern in person_contexts:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                names = re.split(r'\s*/\s*', match)
+                person_names.extend(names)
+        
+        if person_names:
+            patterns["person_names"] = list(set(person_names))
+        
+        return patterns
+    
+    def _extract_contextual_entities(self, text):
+        """컨텍스트를 고려한 엔티티 추출"""
+        entities = {}
+        sentences = re.split(r'[.!?\n]+', text)
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) < 5:
+                continue
+            
+            for class_name, keywords in self.domain_keywords.items():
+                if any(keyword.lower() in sentence.lower() for keyword in keywords):
+                    if class_name not in entities:
+                        entities[class_name] = []
+                    
+                    specific_entities = self._extract_specific_entities(sentence, class_name)
+                    entities[class_name].extend(specific_entities)
+        
+        # 중복 제거
+        for class_name in entities:
+            entities[class_name] = list(set(entities[class_name]))
+        
+        return entities
+    
+    def _extract_specific_entities(self, sentence, class_name):
+        """특정 클래스에 대한 구체적 엔티티 추출"""
+        entities = []
+        
+        if class_name == "Equipment":
+            equipment_types = re.findall(r'\b(CENTRIFUGAL|PUMP|MOTOR|DRIVER|COMPRESSOR|VESSEL|TANK|HEAT\s+EXCHANGER)\b', sentence.upper())
+            entities.extend(equipment_types)
+            
+            equipment_ids = re.findall(r'\b([A-Z]-?\d+(?:\s*[A-Z]/?)*)\b', sentence)
+            entities.extend(equipment_ids)
+        
+        elif class_name == "ProcessRequirement":
+            process_vars = re.findall(r'\b(temperature|pressure|flow|capacity|viscosity|density)\b', sentence.lower())
+            entities.extend(process_vars)
+            
+            for unit_type, units in self.unit_patterns.items():
+                for unit in units:
+                    pattern = rf'(\d+\.?\d*\s*{re.escape(unit)})'
+                    matches = re.findall(pattern, sentence)
+                    entities.extend(matches)
+        
+        elif class_name == "Project":
+            project_info = re.findall(r'\b([A-Z0-9]{3,}(?:-[A-Z0-9]+)*)\b', sentence)
+            entities.extend(project_info)
+        
+        elif class_name == "Person":
+            if any(word in sentence.lower() for word in ['by', 'checked', 'reviewed', 'approved']):
+                names = re.findall(r'\b([A-Z]{2,4})\b', sentence)
+                entities.extend(names)
+        
+        return entities
+    
+    def _extract_relations(self, text, entities):
+        """엔티티 간 관계 추출"""
+        relations = []
+        
+        relation_patterns = {
+            "hasEquipment": (r'(project|job).*?(equipment|pump|motor)', "Project", "Equipment"),
+            "hasProcessReq": (r'(equipment|pump).*?(temperature|pressure|flow)', "Equipment", "ProcessRequirement"),
+            "reviewedBy": (r'(revision|document).*?(?:by|checked|reviewed).*?([A-Z]{2,4})', "Revision", "Person"),
+            "hasValue": (r'(\w+).*?(\d+\.?\d*\s*[a-zA-Z/%]+)', "ProcessRequirement", "Literal")
+        }
+        
+        for relation_name, (pattern, domain_class, range_class) in relation_patterns.items():
+            matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+            for match in matches:
+                if isinstance(match, tuple) and len(match) >= 2:
+                    relations.append({
+                        "property": relation_name,
+                        "domain": domain_class,
+                        "range": range_class,
+                        "instances": match,
+                        "confidence": 0.7
+                    })
+        
+        return relations
+    
+    def _calculate_confidence(self, patterns, entities):
+        """신뢰도 점수 계산"""
+        confidence_scores = {}
+        
+        for class_name, entity_list in entities.items():
+            for entity in entity_list:
+                confidence = 0.5
+                
+                if class_name in self.domain_keywords:
+                    if any(keyword in entity.lower() for keyword in self.domain_keywords[class_name]):
+                        confidence += 0.2
+                
+                if re.match(r'^[A-Z]-?\d+', entity):
+                    confidence += 0.2
+                
+                if re.match(r'^\d+\.?\d*\s*[a-zA-Z/%]+$', entity):
+                    confidence += 0.3
+                
+                confidence_scores[entity] = min(confidence, 1.0)
+        
+        return confidence_scores
+    
+    def _match_to_ontology(self, entities):
+        """온톨로지 스키마와 매칭"""
+        matches = {}
+        
+        for class_name, entity_list in entities.items():
+            if class_name in self.classes:
+                matches[class_name] = []
+                for entity in entity_list:
+                    match_info = {
+                        "entity": entity,
+                        "ontology_class": class_name,
+                        "confidence": self.confidence_scores.get(entity, 0.5),
+                        "properties": self._suggest_properties(entity, class_name)
+                    }
+                    matches[class_name].append(match_info)
+        
+        return matches
+    
+    def _suggest_properties(self, entity, class_name):
+        """엔티티에 적합한 프로퍼티 제안"""
+        suggestions = []
+        
+        if class_name == "Equipment":
+            suggestions.extend(["itemNo", "equipmentType", "capacity"])
+        elif class_name == "Project":
+            suggestions.extend(["jobNo", "projectName", "docNo"])
+        elif class_name == "ProcessRequirement":
+            suggestions.extend(["value", "unit", "condition"])
+        elif class_name == "Person":
+            suggestions.extend(["name", "role"])
+        
+        return suggestions
+    
+    def _generate_domain_insights(self, text):
+        """도메인 특화 인사이트 생성"""
+        insights = {
+            "document_type": "technical_specification",
+            "industry_domain": "process_engineering",
+            "complexity_score": min(len(text) / 1000, 5.0),
+            "technical_density": len(re.findall(r'\d+\.?\d*\s*[a-zA-Z/%]+', text)) / max(len(text.split()), 1)
+        }
+        
+        return insights
+    
+    def _update_learned_knowledge(self, patterns, entities, relations):
+        """학습된 지식 업데이트"""
+        for pattern_type, values in patterns.items():
+            if pattern_type not in self.learned_patterns:
+                self.learned_patterns[pattern_type] = {}
+            
+            for value in values:
+                if isinstance(value, tuple):
+                    value = str(value)
+                self.learned_patterns[pattern_type][value] = self.learned_patterns[pattern_type].get(value, 0) + 1
+        
+        for class_name, entity_list in entities.items():
+            if class_name not in self.entity_instances:
+                self.entity_instances[class_name] = set()
+            self.entity_instances[class_name].update(entity_list)
+
+# PDF 처리 및 그래프 생성 (강화된 버전)
+def process_pdf_to_graph(pdf_content, filename):
+    """PDF 내용을 처리하여 강화된 지식 그래프 생성"""
+    print(f"📄 Processing PDF with advanced ontology learning: {filename}")
+    
+    # 강화된 온톨로지 학습
+    learning_results = ontology_learner.learn_from_text(pdf_content)
+    
+    # 그래프 생성
+    G = nx.DiGraph()
+    node_counter = 0
+    
+    # 문서 루트 노드
+    doc_node = f"Document_{filename.replace('.', '_')}_{node_counter}"
+    G.add_node(doc_node, node_type="entity", ontology_class="Document")
+    node_counter += 1
+    
+    # 온톨로지 매칭된 엔티티 우선 처리
+    matched_entities = learning_results.get("matched_entities", {})
+    confidence_scores = learning_results.get("confidence_scores", {})
+    
+    for class_name, entity_matches in matched_entities.items():
+        for match_info in entity_matches[:5]:  # 최대 5개만
+            entity = match_info["entity"]
+            confidence = match_info["confidence"]
+            
+            # 고신뢰도 엔티티만 그래프에 추가
+            if confidence > 0.6:
+                entity_node = f"{class_name}_{entity.replace(' ', '_').replace('/', '_')}_{node_counter}"
+                G.add_node(entity_node, 
+                          node_type="entity", 
+                          ontology_class=class_name,
+                          confidence=confidence)
+                
+                G.add_edge(doc_node, entity_node, relation=f"has{class_name}")
+                
+                # 엔티티 값 리터럴 노드
+                value_node = f"Literal_{entity}_{node_counter}"
+                G.add_node(value_node, 
+                          node_type="literal", 
+                          ontology_class="string",
+                          confidence=confidence + 0.1)
+                
+                G.add_edge(entity_node, value_node, relation="hasValue")
+                node_counter += 1
+    
+    # 수치 값 특별 처리
+    patterns = learning_results.get("patterns", {})
+    if "numerical_values" in patterns:
+        unit_groups = {}
+        for value, unit, unit_type in patterns["numerical_values"]:
+            if unit_type not in unit_groups:
+                unit_groups[unit_type] = []
+            unit_groups[unit_type].append((value, unit))
+        
+        for unit_type, values in unit_groups.items():
+            group_node = f"ProcessGroup_{unit_type}_{node_counter}"
+            G.add_node(group_node, 
+                      node_type="entity", 
+                      ontology_class="ProcessRequirement",
+                      confidence=0.8)
+            
+            G.add_edge(doc_node, group_node, relation="hasProcessReq")
+            
+            for value, unit in values[:3]:
+                val_node = f"Value_{value}_{unit.replace('/', '_')}_{node_counter}"
+                G.add_node(val_node, 
+                          node_type="literal", 
+                          ontology_class="decimal",
+                          confidence=0.9)
+                
+                G.add_edge(group_node, val_node, relation="hasValue")
+                node_counter += 1
+    
+    # 노드 특징 생성
+    node_features = {}
+    for node in G.nodes():
+        node_data = G.nodes[node]
+        node_features[node] = {
+            "type": node_data.get("node_type", "entity"),
+            "ontology_class": node_data.get("ontology_class", "Unknown"),
+            "confidence": node_data.get("confidence", 0.5)
+        }
+    
+    # 신뢰도 기반 예측 생성
+    predictions = []
+    for node in G.nodes():
+        node_info = node_features[node]
+        confidence = node_info["confidence"]
+        node_type = node_info["type"]
+        
+        if confidence > 0.8:
+            if node_type == "entity":
+                predictions.append(1)
+            elif node_type == "literal":
+                predictions.append(2)
+            else:
+                predictions.append(0)
+        else:
+            predictions.append(1 if node_type == "entity" else 2)
+    
+    print(f"✅ Advanced graph generated:")
+    print(f"   - Nodes: {G.number_of_nodes()}")
+    print(f"   - Edges: {G.number_of_edges()}")
+    print(f"   - High confidence entities: {sum(1 for n in node_features.values() if n['confidence'] > 0.8)}")
+    
+    return G, node_features, predictions, learning_results
+
+# 샘플 데이터 생성 함수
+def create_sample_graph():
+    G = nx.DiGraph()
+    
+    nodes = [
+        ("Project_7T04", {"node_type": "entity", "ontology_class": "Project"}),
+        ("Equipment_P2105", {"node_type": "entity", "ontology_class": "Equipment"}), 
+        ("ProcessReq_Temp", {"node_type": "entity", "ontology_class": "ProcessRequirement"}),
+        ("7T04", {"node_type": "literal", "ontology_class": "string"}),
+        ("P-2105 A/B", {"node_type": "literal", "ontology_class": "string"}),
+        ("384 ℃", {"node_type": "literal", "ontology_class": "decimal"})
+    ]
+    
+    for node_id, attrs in nodes:
+        G.add_node(node_id, **attrs)
+    
+    edges = [
+        ("Project_7T04", "7T04", "hasValue"),
+        ("Equipment_P2105", "P-2105 A/B", "hasValue"),
+        ("ProcessReq_Temp", "384 ℃", "hasValue"),
+        ("Project_7T04", "Equipment_P2105", "hasEquipment"),
+        ("Equipment_P2105", "ProcessReq_Temp", "hasProcessReq")
+    ]
+    
+    for src, dst, rel in edges:
+        G.add_edge(src, dst, relation=rel)
+    
+    node_features = {}
+    for node in G.nodes():
+        node_data = G.nodes[node]
+        node_features[node] = {
+            "type": node_data.get("node_type", "entity"),
+            "ontology_class": node_data.get("ontology_class", "Unknown"),
+            "confidence": 0.8 if node_data.get("node_type") == "entity" else 0.9
+        }
+    
+    predictions = []
+    for node in G.nodes():
+        node_type = node_features[node]["type"]
+        if node_type == "entity":
+            predictions.append(1)
+        elif node_type == "literal":
+            predictions.append(2)
+        else:
+            predictions.append(0)
+    
+    return G, node_features, predictions
+
+# 자연어 쿼리 처리 클래스
+class NaturalLanguageQueryProcessor:
+    def __init__(self, ontology_learner):
+        self.ontology_learner = ontology_learner
+        
+        # 쿼리 패턴 매핑
+        self.query_patterns = {
+            "show_all": [
+                r"show\s+all\s+(\w+)",
+                r"list\s+all\s+(\w+)",
+                r"find\s+all\s+(\w+)",
+                r"get\s+all\s+(\w+)"
+            ],
+            "filter_by_confidence": [
+                r"(?:show|find|list)\s+(\w+)\s+with\s+(?:high|good)\s+confidence",
+                r"(?:show|find|list)\s+high\s+confidence\s+(\w+)",
+                r"(\w+)\s+with\s+confidence\s+>\s*(\d+\.?\d*)"
+            ],
+            "filter_by_class": [
+                r"(?:show|find|list)\s+(\w+)\s+(?:of\s+type|class)\s+(\w+)",
+                r"(\w+)\s+that\s+are\s+(\w+)",
+                r"all\s+(\w+)\s+(\w+)"
+            ],
+            "count": [
+                r"(?:how\s+many|count)\s+(\w+)",
+                r"number\s+of\s+(\w+)",
+                r"total\s+(\w+)"
+            ],
+            "stats": [
+                r"(?:statistics|stats)\s+(?:for|of|about)?\s*(\w+)?",
+                r"(?:summary|overview)\s+(?:of|about)?\s*(\w+)?",
+                r"(?:analyze|analysis)\s+(\w+)?"
+            ],
+            "relationships": [
+                r"(?:show|find|list)\s+(?:relationships?|relations?|connections?)",
+                r"what\s+is\s+connected\s+to\s+(\w+)",
+                r"(\w+)\s+(?:connected|related|linked)\s+to\s+(\w+)"
+            ]
+        }
+        
+        # 동의어 매핑
+        self.synonyms = {
+            "equipment": ["equipment", "machine", "device", "pump", "motor"],
+            "project": ["project", "job", "document", "doc"],
+            "requirement": ["requirement", "spec", "specification", "parameter"],
+            "person": ["person", "people", "engineer", "reviewer", "checker"],
+            "entity": ["entity", "entities", "item", "object", "node"],
+            "literal": ["literal", "value", "data", "text"],
+            "confidence": ["confidence", "certainty", "reliability", "accuracy"]
+        }
+    
+    def process_query(self, query, graph_data):
+        """자연어 쿼리를 처리하여 결과 반환"""
+        query = query.lower().strip()
+        print(f"🔍 Processing query: '{query}'")
+        
+        # 쿼리 타입 식별
+        query_type, matches = self._identify_query_type(query)
+        print(f"🎯 Query type: {query_type}, matches: {matches}")
+        
+        # 데이터 준비
+        nodes = graph_data.get("nodes", [])
+        edges = graph_data.get("edges", [])
+        stats = graph_data.get("stats", {})
+        learning_results = graph_data.get("learning_results", {})
+        
+        # 쿼리 타입에 따른 처리
+        if query_type == "show_all":
+            return self._handle_show_all(matches, nodes, edges)
+        elif query_type == "filter_by_confidence":
+            return self._handle_confidence_filter(matches, nodes)
+        elif query_type == "filter_by_class":
+            return self._handle_class_filter(matches, nodes)
+        elif query_type == "count":
+            return self._handle_count(matches, nodes)
+        elif query_type == "stats":
+            return self._handle_stats(matches, nodes, stats, learning_results)
+        elif query_type == "relationships":
+            return self._handle_relationships(matches, nodes, edges)
+        else:
+            return self._handle_fallback_query(query, nodes, edges, stats)
+    
+    def _identify_query_type(self, query):
+        """쿼리 타입과 매칭된 그룹 식별"""
+        for query_type, patterns in self.query_patterns.items():
+            for pattern in patterns:
+                match = re.search(pattern, query, re.IGNORECASE)
+                if match:
+                    return query_type, match.groups()
+        return "unknown", ()
+    
+    def _normalize_term(self, term):
+        """용어 정규화 (동의어 처리)"""
+        if not term:
+            return term
+            
+        term = term.lower()
+        for canonical, synonyms in self.synonyms.items():
+            if term in synonyms:
+                return canonical
+        return term
+    
+    def _handle_show_all(self, matches, nodes, edges):
+        """'show all X' 타입 쿼리 처리"""
+        if not matches:
+            return {"type": "table", "data": nodes[:10], "message": "Showing all nodes (limited to 10)"}
+        
+        target = self._normalize_term(matches[0])
+        
+        if target in ["entity", "entities"]:
+            entities = [n for n in nodes if n.get("type") == "entity"]
+            return {
+                "type": "table", 
+                "data": entities,
+                "message": f"Found {len(entities)} entities",
+                "columns": ["id", "ontology_class", "confidence"]
+            }
+        elif target in ["literal", "literals", "value", "values"]:
+            literals = [n for n in nodes if n.get("type") == "literal"]
+            return {
+                "type": "table", 
+                "data": literals,
+                "message": f"Found {len(literals)} literals",
+                "columns": ["id", "ontology_class", "confidence"]
+            }
+        elif target in self.synonyms.get("equipment", []):
+            equipment = [n for n in nodes if n.get("ontology_class", "").lower() == "equipment"]
+            return {
+                "type": "table", 
+                "data": equipment,
+                "message": f"Found {len(equipment)} equipment entities",
+                "columns": ["id", "confidence"]
+            }
+        elif target in self.synonyms.get("project", []):
+            projects = [n for n in nodes if n.get("ontology_class", "").lower() == "project"]
+            return {
+                "type": "table", 
+                "data": projects,
+                "message": f"Found {len(projects)} project entities",
+                "columns": ["id", "confidence"]
+            }
+        else:
+            # 일반적인 검색
+            filtered = [n for n in nodes if target in n.get("id", "").lower() or 
+                       target in n.get("ontology_class", "").lower()]
+            return {
+                "type": "table", 
+                "data": filtered,
+                "message": f"Found {len(filtered)} items matching '{target}'",
+                "columns": ["id", "type", "ontology_class", "confidence"]
+            }
+    
+    def _handle_confidence_filter(self, matches, nodes):
+        """신뢰도 기반 필터링"""
+        if len(matches) >= 2 and matches[1].replace('.', '').isdigit():
+            # 특정 임계값 지정된 경우
+            threshold = float(matches[1])
+            target = self._normalize_term(matches[0])
+        else:
+            # 'high confidence' 등의 경우
+            threshold = 0.8
+            target = self._normalize_term(matches[0]) if matches else "entity"
+        
+        filtered_nodes = []
+        for node in nodes:
+            confidence = node.get("confidence", 0)
+            if confidence > threshold:
+                if target == "entity" and node.get("type") == "entity":
+                    filtered_nodes.append(node)
+                elif target in node.get("ontology_class", "").lower():
+                    filtered_nodes.append(node)
+                elif target in ["all", "any", ""]:
+                    filtered_nodes.append(node)
+        
+        return {
+            "type": "table",
+            "data": filtered_nodes,
+            "message": f"Found {len(filtered_nodes)} items with confidence > {threshold}",
+            "columns": ["id", "type", "ontology_class", "confidence"]
+        }
+    
+    def _handle_class_filter(self, matches, nodes):
+        """클래스/타입 기반 필터링"""
+        if len(matches) >= 2:
+            item_type = self._normalize_term(matches[0])
+            class_name = self._normalize_term(matches[1])
+            
+            filtered = [n for n in nodes if 
+                       class_name in n.get("ontology_class", "").lower() or
+                       class_name in n.get("type", "").lower()]
+            
+            return {
+                "type": "table",
+                "data": filtered,
+                "message": f"Found {len(filtered)} {item_type} of type {class_name}",
+                "columns": ["id", "type", "ontology_class", "confidence"]
+            }
+        
+        return {"type": "error", "message": "Could not parse class filter query"}
+    
+    def _handle_count(self, matches, nodes):
+        """개수 세기"""
+        if not matches:
+            total = len(nodes)
+            return {
+                "type": "stat",
+                "data": {"Total Nodes": total},
+                "message": f"Total count: {total}"
+            }
+        
+        target = self._normalize_term(matches[0])
+        
+        if target in ["entity", "entities"]:
+            count = sum(1 for n in nodes if n.get("type") == "entity")
+        elif target in ["literal", "literals"]:
+            count = sum(1 for n in nodes if n.get("type") == "literal")
+        elif target in self.synonyms.get("equipment", []):
+            count = sum(1 for n in nodes if n.get("ontology_class", "").lower() == "equipment")
+        elif target in self.synonyms.get("project", []):
+            count = sum(1 for n in nodes if n.get("ontology_class", "").lower() == "project")
+        else:
+            count = sum(1 for n in nodes if target in n.get("ontology_class", "").lower())
+        
+        return {
+            "type": "stat",
+            "data": {f"{target.title()} Count": count},
+            "message": f"Count of {target}: {count}"
+        }
+    
+    def _handle_stats(self, matches, nodes, stats, learning_results):
+        """통계 정보 제공"""
+        confidence_scores = learning_results.get("confidence_scores", {})
+        domain_insights = learning_results.get("domain_insights", {})
+        
+        # 기본 통계
+        basic_stats = {
+            "Total Nodes": len(nodes),
+            "Entity Nodes": sum(1 for n in nodes if n.get("type") == "entity"),
+            "Literal Nodes": sum(1 for n in nodes if n.get("type") == "literal"),
+            "Average Confidence": sum(n.get("confidence", 0) for n in nodes) / max(len(nodes), 1)
+        }
+        
+        # 신뢰도 분포
+        if confidence_scores:
+            high_conf = sum(1 for c in confidence_scores.values() if c > 0.8)
+            med_conf = sum(1 for c in confidence_scores.values() if 0.5 < c <= 0.8)
+            low_conf = sum(1 for c in confidence_scores.values() if c <= 0.5)
+            
+            basic_stats.update({
+                "High Confidence (>0.8)": high_conf,
+                "Medium Confidence (0.5-0.8)": med_conf,
+                "Low Confidence (<=0.5)": low_conf
+            })
+        
+        # 도메인 인사이트
+        if domain_insights:
+            basic_stats.update({
+                "Document Type": domain_insights.get("document_type", "Unknown"),
+                "Industry Domain": domain_insights.get("industry_domain", "Unknown"),
+                "Complexity Score": f"{domain_insights.get('complexity_score', 0):.2f}/5.0",
+                "Technical Density": f"{domain_insights.get('technical_density', 0):.3f}"
+            })
+        
+        return {
+            "type": "stat",
+            "data": basic_stats,
+            "message": "Knowledge graph statistics"
+        }
+    
+    def _handle_relationships(self, matches, nodes, edges):
+        """관계 정보 처리"""
+        if not edges:
+            return {
+                "type": "table",
+                "data": [],
+                "message": "No relationships found in the current graph"
+            }
+        
+        # 관계 통계
+        relation_counts = {}
+        for edge in edges:
+            rel = edge.get("relation", "unknown")
+            relation_counts[rel] = relation_counts.get(rel, 0) + 1
+        
+        relationship_data = [
+            {"Relationship Type": rel, "Count": count}
+            for rel, count in relation_counts.items()
+        ]
+        
+        return {
+            "type": "table",
+            "data": relationship_data,
+            "message": f"Found {len(edges)} relationships of {len(relation_counts)} types",
+            "columns": ["Relationship Type", "Count"]
+        }
+    
+    def _handle_fallback_query(self, query, nodes, edges, stats):
+        """알려지지 않은 쿼리에 대한 fallback 처리"""
+        # 키워드 기반 검색
+        keywords = query.split()
+        matched_nodes = []
+        
+        for node in nodes:
+            node_text = f"{node.get('id', '')} {node.get('ontology_class', '')} {node.get('type', '')}".lower()
+            if any(keyword in node_text for keyword in keywords):
+                matched_nodes.append(node)
+        
+        if matched_nodes:
+            return {
+                "type": "table",
+                "data": matched_nodes,
+                "message": f"Found {len(matched_nodes)} items matching your search",
+                "columns": ["id", "type", "ontology_class", "confidence"]
+            }
+        
+        # 제안사항 제공
+        suggestions = [
+            "show all entities",
+            "show all equipment", 
+            "count projects",
+            "show high confidence items",
+            "statistics",
+            "show relationships"
+        ]
+        
+# 글로벌 변수
+ontology_learner = AdvancedOntologyLearner()
+query_processor = NaturalLanguageQueryProcessor(ontology_learner)
+graph_data_store = {}
+
+# Dash 앱 생성
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+app.layout = dbc.Container([
+    html.H1("🏭 Industrial Knowledge Graph Analyzer", className="text-primary mb-4"),
+    
+    dbc.Row([
+        # 왼쪽 패널
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("📄 Document Upload"),
+                    dcc.Upload(
+                        id="upload-pdf",
+                        children=html.Div([
+                            "Drag and drop PDF files or ",
+                            html.A("click to select", style={"color": "#007bff"})
+                        ]),
+                        style={
+                            'width': '100%',
+                            'height': '60px',
+                            'lineHeight': '60px',
+                            'borderWidth': '2px',
+                            'borderStyle': 'dashed',
+                            'borderRadius': '5px',
+                            'textAlign': 'center',
+                            'backgroundColor': '#f8f9fa'
+                        },
+                        multiple=False
+                    )
+                ])
+            ], className="mb-3"),
+            
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("🎯 Quick Actions"),
+                    dbc.Button("🧪 Test Connection", id="test-btn", color="secondary", className="w-100 mb-2", size="sm"),
+                    dbc.Button("📊 Load Sample Data", id="sample-btn", color="info", className="w-100 mb-2", size="sm"),
+                    dbc.Button("🔄 Update Charts", id="update-btn", color="warning", className="w-100 mb-2", size="sm"),
+                ])
+            ], className="mb-4"),
+            
+            html.Div(id="status-output", className="mb-4"),
+            
+            dbc.Card([
+                dbc.CardBody([
+                    html.H6("📈 System Info"),
+                    html.P("✅ Ontology Classes: 7", className="mb-1"),
+                    html.P("✅ Object Properties: 7", className="mb-1"),
+                    html.P("✅ Datatype Properties: 6", className="mb-1"),
+                    html.P("🧠 Advanced Learning: Enabled", className="mb-0"),
+                ])
+            ]),
+            
+            # 학습 통계 카드 추가
+            html.Div(id="learning-stats", className="mt-3")
+        ], width=4),
+        
+        # 오른쪽 패널
+        dbc.Col([
+            # 자연어 쿼리 인터페이스 추가
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("🗣️ Natural Language Query"),
+                    dbc.InputGroup([
+                        dbc.Input(
+                            id="nl-query-input",
+                            placeholder="e.g., 'show all equipment with high confidence'",
+                            type="text"
+                        ),
+                        dbc.Button("🔍 Query", id="query-btn", color="primary")
+                    ]),
+                    html.Div(id="query-output", className="mt-3")
+                ])
+            ], className="mb-4"),
+            
+            html.H4("📊 Node Classification"),
+            dcc.Graph(id="pie-chart", style={'height': '400px'}),
+            
+            html.Hr(),
+            
+            html.H4("🕸️ Knowledge Graph"),
+            dcc.Graph(id="network-graph", style={'height': '500px'})
+        ], width=8)
+    ]),
+    
+    # 숨겨진 데이터 저장소
+    dcc.Store(id="data-store", data={})
+], fluid=True)
+
+# 콜백들
+@app.callback(
+    [Output("status-output", "children"), Output("data-store", "data")],
+    [Input("test-btn", "n_clicks"), Input("sample-btn", "n_clicks"), Input("upload-pdf", "contents")],
+    [State("upload-pdf", "filename")],
+    prevent_initial_call=True
+)
+def handle_all_inputs(test_clicks, sample_clicks, pdf_contents, pdf_filename):
+    from dash import ctx
+    
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    print(f"🔥 Input callback triggered: {trigger_id}")
+    
+    if trigger_id == "test-btn":
+        print("✅ Test button clicked")
+        return dbc.Alert("✅ Connection test successful!", color="success"), {}
+    
+    elif trigger_id == "sample-btn":
+        print("📊 Sample button clicked - generating data...")
+        
+        G, node_features, predictions = create_sample_graph()
+        
+        graph_data = {
+            "nodes": [{"id": node, **node_features[node]} for node in G.nodes()],
+            "edges": [{"source": u, "target": v, "relation": data.get("relation", "unknown")} 
+                     for u, v, data in G.edges(data=True)],
+            "predictions": predictions,
+            "stats": {
+                "total_nodes": G.number_of_nodes(),
+                "total_edges": G.number_of_edges(),
+                "source": "sample"
+            }
+        }
+        
+        print(f"✅ Sample data created: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        
+        message = dbc.Alert([
+            html.H5("✅ Sample data loaded!", className="alert-heading"),
+            html.P(f"Created {G.number_of_nodes()} nodes and {G.number_of_edges()} edges"),
+            html.P("Click 'Update Charts' to see visualizations!")
+        ], color="success")
+        
+        return message, graph_data
+    
+    elif trigger_id == "upload-pdf" and pdf_contents:
+        print(f"📄 PDF uploaded: {pdf_filename}")
+        
+        try:
+            if not pdf_filename or not pdf_filename.lower().endswith('.pdf'):
+                return dbc.Alert("❌ Please select a PDF file", color="warning"), {}
+            
+            content_type, content_string = pdf_contents.split(',')
+            decoded = base64.b64decode(content_string)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(decoded)
+                tmp_file_path = tmp_file.name
+            
+            try:
+                pdf_text = extract_pdf_text(tmp_file_path)
+                print(f"📝 Extracted {len(pdf_text)} characters from PDF")
+                
+                if len(pdf_text.strip()) < 10:
+                    return dbc.Alert("❌ No meaningful text found in PDF", color="warning"), {}
+                
+                G, node_features, predictions, learning_results = process_pdf_to_graph(pdf_text, pdf_filename)
+                
+                graph_data = {
+                    "nodes": [{"id": node, **node_features[node]} for node in G.nodes()],
+                    "edges": [{"source": u, "target": v, "relation": data.get("relation", "unknown")} 
+                             for u, v, data in G.edges(data=True)],
+                    "predictions": predictions,
+                    "learning_results": learning_results,
+                    "stats": {
+                        "total_nodes": G.number_of_nodes(),
+                        "total_edges": G.number_of_edges(),
+                        "source": "pdf",
+                        "filename": pdf_filename,
+                        "text_length": len(pdf_text),
+                        "patterns_found": len(learning_results.get("patterns", {})),
+                        "entities_found": sum(len(v) for v in learning_results.get("new_entities", {}).values()),
+                        "relations_found": len(learning_results.get("new_relations", [])),
+                        "avg_confidence": sum(learning_results.get("confidence_scores", {}).values()) / 
+                                        max(len(learning_results.get("confidence_scores", {})), 1),
+                        "domain_insights": learning_results.get("domain_insights", {})
+                    }
+                }
+                
+                print(f"✅ PDF processed: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+                
+                stats = graph_data["stats"]
+                domain_insights = stats.get("domain_insights", {})
+                
+                message = dbc.Alert([
+                    html.H5(f"✅ PDF '{pdf_filename}' processed with advanced ontology learning!", className="alert-heading"),
+                    dbc.Row([
+                        dbc.Col([
+                            html.P(f"📊 Text: {stats['text_length']} characters", className="mb-1"),
+                            html.P(f"🎯 Patterns: {stats['patterns_found']} types", className="mb-1"),
+                            html.P(f"🏷️ Entities: {stats['entities_found']} found", className="mb-1"),
+                        ], width=6),
+                        dbc.Col([
+                            html.P(f"🔗 Relations: {stats['relations_found']} identified", className="mb-1"),
+                            html.P(f"🕸️ Graph: {stats['total_nodes']} nodes, {stats['total_edges']} edges", className="mb-1"),
+                            html.P(f"🎖️ Confidence: {stats['avg_confidence']:.2f}", className="mb-1"),
+                        ], width=6),
+                    ]),
+                    html.Hr(),
+                    html.P([
+                        "🧠 Domain: ", 
+                        html.Strong(domain_insights.get("industry_domain", "Unknown")),
+                        f" | Complexity: {domain_insights.get('complexity_score', 0):.1f}/5.0"
+                    ], className="mb-2"),
+                    html.P("Click 'Update Charts' to see the advanced knowledge graph!", className="mb-0")
+                ], color="success")
+                
+                return message, graph_data
+                
+            finally:
+                if os.path.exists(tmp_file_path):
+                    os.unlink(tmp_file_path)
+        
+        except Exception as e:
+            print(f"❌ PDF processing error: {e}")
+            return dbc.Alert(f"❌ Error processing PDF: {str(e)}", color="danger"), {}
+    
+    return "", {}
+
+@app.callback(
+    Output("pie-chart", "figure"),
+    [Input("update-btn", "n_clicks")],
+    [State("data-store", "data")]
+)
+def update_pie_chart(n_clicks, stored_data):
+    print(f"🎯 Pie chart callback - clicks: {n_clicks}, data: {bool(stored_data)}")
+    
+    if n_clicks and stored_data and "predictions" in stored_data:
+        predictions = stored_data["predictions"]
+        pred_counts = Counter(predictions)
+        
+        labels = ["Class", "Entity", "Literal"]
+        values = [pred_counts.get(i, 0) for i in range(3)]
+        
+        fig = go.Figure()
+        fig.add_trace(go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.3,
+            textinfo="label+percent+value"
+        ))
+        
+        fig.update_layout(
+            title=f"Node Classification Results (Total: {sum(values)})",
+            height=400
+        )
+        
+        print(f"✅ Pie chart created: {values}")
+        return fig
+    
+    return go.Figure().add_annotation(
+        text="Load sample data and click 'Update Charts'",
+        showarrow=False, x=0.5, y=0.5
+    )
+
+@app.callback(
+    Output("network-graph", "figure"),
+    [Input("update-btn", "n_clicks")],
+    [State("data-store", "data")]
+)
+def update_network_graph(n_clicks, stored_data):
+    print(f"🕸️ Network graph callback - clicks: {n_clicks}, data: {bool(stored_data)}")
+    
+    if n_clicks and stored_data and "nodes" in stored_data:
+        nodes = stored_data["nodes"]
+        edges = stored_data["edges"]
+        
+        G = nx.DiGraph()
+        for node in nodes:
+            G.add_node(node["id"])
+        for edge in edges:
+            G.add_edge(edge["source"], edge["target"])
+        
+        pos = nx.spring_layout(G, k=2, iterations=50)
+        
+        edge_x, edge_y = [], []
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        node_x = [pos[node][0] for node in G.nodes()]
+        node_y = [pos[node][1] for node in G.nodes()]
+        node_text = [node[:15] for node in G.nodes()]
+        
+        # 노드 색상 (신뢰도 기반)
+        node_colors = []
+        node_sizes = []
+        for node in G.nodes():
+            node_info = next((n for n in nodes if n["id"] == node), {})
+            confidence = node_info.get("confidence", 0.5)
+            node_type = node_info.get("type", "unknown")
+            
+            # 신뢰도에 따른 크기
+            node_sizes.append(20 + confidence * 30)
+            
+            # 타입에 따른 색상
+            if node_type == "entity":
+                node_colors.append(f"rgba(173, 216, 230, {0.5 + confidence*0.5})")  # 라이트블루
+            elif node_type == "literal":
+                node_colors.append(f"rgba(144, 238, 144, {0.5 + confidence*0.5})")  # 라이트그린
+            else:
+                node_colors.append(f"rgba(255, 182, 193, {0.5 + confidence*0.5})")  # 라이트핑크
+        
+        fig = go.Figure()
+        
+        # 엣지 추가
+        fig.add_trace(go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=2, color='gray'),
+            mode='lines',
+            showlegend=False,
+            hoverinfo='none'
+        ))
+        
+        # 노드 추가 (신뢰도 기반 시각화)
+        fig.add_trace(go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers+text',
+            text=node_text,
+            textposition="middle center",
+            marker=dict(
+                size=node_sizes,
+                color=node_colors,
+                line=dict(width=2, color='black')
+            ),
+            showlegend=False,
+            hoverinfo='text',
+            hovertext=[f"{node}<br>Type: {next((n for n in nodes if n['id'] == node), {}).get('type', 'unknown')}<br>Confidence: {next((n for n in nodes if n['id'] == node), {}).get('confidence', 0):.2f}" for node in G.nodes()]
+        ))
+        
+        fig.update_layout(
+            title=f"Advanced Knowledge Graph ({G.number_of_nodes()} nodes, {G.number_of_edges()} edges)<br><sub>Node size = confidence, Color = type</sub>",
+            height=500,
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            showlegend=False
+        )
+        
+        print(f"✅ Enhanced network graph created: {G.number_of_nodes()} nodes")
+        return fig
+    
+    return go.Figure().add_annotation(
+        text="Load sample data and click 'Update Charts'",
+        showarrow=False, x=0.5, y=0.5
+    )
+
+@app.callback(
+    Output("learning-stats", "children"),
+    [Input("data-store", "data")]
+)
+def update_learning_stats(stored_data):
+    """온톨로지 학습 통계 표시"""
+    if not stored_data or "learning_results" not in stored_data:
+        return ""
+    
+    learning_results = stored_data["learning_results"]
+    stats = stored_data.get("stats", {})
+    
+    confidence_scores = learning_results.get("confidence_scores", {})
+    domain_insights = learning_results.get("domain_insights", {})
+    
+    if not confidence_scores and not domain_insights:
+        return ""
+    
+    # 신뢰도 분포
+    high_conf = sum(1 for c in confidence_scores.values() if c > 0.8)
+    med_conf = sum(1 for c in confidence_scores.values() if 0.5 < c <= 0.8)
+    low_conf = sum(1 for c in confidence_scores.values() if c <= 0.5)
+    
+    return dbc.Card([
+        dbc.CardBody([
+            html.H6("🧠 Learning Analytics", className="card-title"),
+            html.P(f"🎖️ High Confidence: {high_conf}", className="mb-1"),
+            html.P(f"🏃 Medium Confidence: {med_conf}", className="mb-1"),
+            html.P(f"🤔 Low Confidence: {low_conf}", className="mb-1"),
+            html.Hr(className="my-2"),
+            html.P(f"📈 Technical Density: {domain_insights.get('technical_density', 0):.3f}", className="mb-1"),
+            html.P(f"🔬 Document Type: {domain_insights.get('document_type', 'Unknown')}", className="mb-0"),
+        ])
+    ], className="border-info")
+
+@app.callback(
+    Output("query-output", "children"),
+    [Input("query-btn", "n_clicks")],
+    [State("nl-query-input", "value"), State("data-store", "data")]
+)
+def handle_natural_language_query(n_clicks, query_text, stored_data):
+    """자연어 쿼리 처리"""
+    if not n_clicks or not query_text or not stored_data:
+        return html.Div([
+            html.P("💡 Query Examples:", className="mb-2 font-weight-bold"),
+            html.Ul([
+                html.Li("show all equipment"),
+                html.Li("count entities with high confidence"),
+                html.Li("statistics"),
+                html.Li("show relationships"),
+                html.Li("find all Project class items")
+            ], className="mb-0")
+        ])
+    
+    print(f"🗣️ Natural language query: '{query_text}'")
+    
+    try:
+        # 쿼리 처리
+        result = query_processor.process_query(query_text, stored_data)
+        
+        # 결과 렌더링
+        return render_query_result(result)
+        
+    except Exception as e:
+        print(f"❌ Query processing error: {e}")
+        return dbc.Alert(f"❌ Error processing query: {str(e)}", color="danger")
+
+def render_query_result(result):
+    """쿼리 결과를 렌더링"""
+    result_type = result.get("type", "error")
+    message = result.get("message", "")
+    data = result.get("data", [])
+    
+    components = [
+        html.P(f"✅ {message}", className="text-success font-weight-bold mb-3")
+    ]
+    
+    if result_type == "table" and data:
+        # 테이블 형태로 결과 표시
+        columns = result.get("columns", [])
+        if not columns and data:
+            columns = list(data[0].keys()) if data else []
+        
+        # 데이터 정리 (소수점 반올림)
+        clean_data = []
+        for item in data[:20]:  # 최대 20개만 표시
+            clean_item = {}
+            for key, value in item.items():
+                if isinstance(value, float):
+                    clean_item[key] = round(value, 3)
+                else:
+                    clean_item[key] = str(value)[:50]  # 길이 제한
+            clean_data.append(clean_item)
+        
+        if clean_data:
+            df = pd.DataFrame(clean_data)
+            table = dbc.Table.from_dataframe(
+                df, 
+                striped=True, 
+                bordered=True, 
+                hover=True, 
+                responsive=True,
+                size="sm"
+            )
+            components.append(table)
+            
+            if len(data) > 20:
+                components.append(
+                    html.P(f"... and {len(data) - 20} more items", className="text-muted")
+                )
+    
+    elif result_type == "stat" and data:
+        # 통계 형태로 결과 표시
+        stat_cards = []
+        for key, value in data.items():
+            stat_cards.append(
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardBody([
+                            html.H5(str(value), className="text-primary"),
+                            html.P(key, className="mb-0")
+                        ])
+                    ], className="text-center")
+                ], width=3)
+            )
+        
+        components.append(dbc.Row(stat_cards[:4]))  # 최대 4개씩
+        
+        if len(stat_cards) > 4:
+            components.append(dbc.Row(stat_cards[4:8], className="mt-2"))
+    
+    elif result_type == "suggestions" and data:
+        # 제안사항 표시
+        components.extend([
+            html.P("💡 Try these queries:", className="font-weight-bold"),
+            html.Ul([html.Li(suggestion) for suggestion in data])
+        ])
+    
+    elif result_type == "error":
+        components = [dbc.Alert(f"❌ {message}", color="danger")]
+    
+    else:
+        components.append(html.P("No results found."))
+    
+    return html.Div(components)
+
+if __name__ == "__main__":
+    print("🚀 Starting Advanced Industrial Knowledge Graph Analyzer...")
+    print("📝 Enhanced ontology learning enabled!")
+    print("🌐 Open http://127.0.0.1:8050 in your browser")
+    
+    app.run(debug=True, port=8050)

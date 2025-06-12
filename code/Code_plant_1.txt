@@ -1,0 +1,176 @@
+import gradio as gr
+import pdfplumber
+import fitz
+import json
+import os
+import sqlite3
+from PIL import Image
+from io import BytesIO
+import re
+import uuid
+import duckdb
+import pandas as pd
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# 환경 로딩
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# 기존 JSON/SQLite 경로
+DB_PATH = "extracted_documents.json"
+DB_SQLITE = "plant_data.db"
+# DuckDB 파일
+DB_DUCKDB = "plant_data.duckdb"
+EXPORT_DIR = "exported_json"
+
+# =============================================================================
+# 유틸리티 및 룰 정의
+
+symbol_map = {
+    "■": True, "☑": True, "✓": True, "✔": True,
+    "□": False, "☐": False, "✗": False, "✕": False,
+}
+
+def extract_numeric_with_unit(text):
+    m = re.match(r"([\d\.]+)\s*([°A-Za-z/%²³]+)?", str(text).strip())
+    if m:
+        return {"value": float(m.group(1)), "unit": m.group(2) or ""}
+    return {"value": text, "unit": ""}
+
+def extract_tags_from_text(lines):
+    tags = set()
+    for line in lines:
+        tags.update(re.findall(r"\b[A-Z]{2,4}[0-9]{1,4}\b", line))
+    return list(tags)
+
+def parse_table(table):
+    filtered = [row for row in table if not (isinstance(row[0], str) and row[0].strip().startswith(('●','◎','■','□')))]
+    data_source = filtered if filtered else table
+    for idx, row in enumerate(data_source):
+        non_empty = sum(1 for cell in row if cell and str(cell).strip())
+        if non_empty >= len(row)/2:
+            headers = [str(cell).strip() or f"col_{i+1}" for i, cell in enumerate(row)]
+            data_rows = data_source[idx+1:]
+            break
+    else:
+        headers = [str(cell).strip() or f"col_{i+1}" for i, cell in enumerate(data_source[0])]
+        data_rows = data_source[1:]
+    structured = [{headers[i]: row[i] for i in range(min(len(headers), len(row)))} for row in data_rows]
+    return structured
+# =============================================================================
+# DB 초기화
+# =============================================================================
+os.makedirs(EXPORT_DIR, exist_ok=True)
+if not os.path.exists(DB_PATH):
+    with open(DB_PATH, "w", encoding="utf-8") as f:
+        json.dump([], f)
+conn = sqlite3.connect(DB_SQLITE)
+c = conn.cursor()
+c.execute(
+    '''CREATE TABLE IF NOT EXISTS documents (
+           doc_id TEXT PRIMARY KEY,
+           source TEXT,
+           metadata TEXT,
+           tables TEXT,
+           tags TEXT,
+           images TEXT
+    )'''
+)
+conn.commit()
+conn.close()
+
+# =============================================================================
+# DB 초기화
+# =============================================================================
+os.makedirs(EXPORT_DIR, exist_ok=True)
+for path in (DB_PATH, DB_SQLITE, DB_DUCKDB):
+    if path == DB_PATH and not os.path.exists(path):
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump([], f)
+# DuckDB 초기화: empty database
+duckdb.connect(DB_DUCKDB).execute("CREATE SCHEMA IF NOT EXISTS default").close()
+
+
+# =============================================================================
+# 저장 함수
+# =============================================================================
+def save_to_database(record):
+    # JSON 저장
+    with open(DB_PATH, 'r', encoding='utf-8') as f:
+        db = json.load(f)
+    db.append(record)
+    with open(DB_PATH, 'w', encoding='utf-8') as f:
+        json.dump(db, f, ensure_ascii=False, indent=2)
+    # SQLite 저장
+    conn = sqlite3.connect(DB_SQLITE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR REPLACE INTO documents (doc_id, source, metadata, tables, tags, images) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            record['doc_id'], record['source'],
+            json.dumps(record.get('metadata', {}), ensure_ascii=False),
+            json.dumps(record.get('tables', []), ensure_ascii=False),
+            json.dumps(record.get('tags', []), ensure_ascii=False),
+            json.dumps(record.get('images', []), ensure_ascii=False)
+        )
+    )
+    conn.commit(); conn.close()
+    # DuckDB 저장: flatten tables into a DataFrame
+    rows = []
+    for tbl in record['tables']:
+        for r in tbl['rows']:
+            flat = {'doc_id': record['doc_id'], 'page': tbl['page'], 'table_index': tbl['table_index']}
+            flat.update(r)
+            rows.append(flat)
+    if rows:
+        df = pd.DataFrame(rows)
+        con = duckdb.connect(DB_DUCKDB)
+        con.register('temp', df)
+        # append
+        con.execute("CREATE TABLE IF NOT EXISTS table_rows AS SELECT * FROM temp LIMIT 0")
+        con.execute("INSERT INTO table_rows SELECT * FROM temp")
+        con.close()
+
+# =============================================================================
+# PDF 처리
+# =============================================================================
+def process_pdf(file):
+    # debug
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger()
+    doc_id = str(uuid.uuid4())[:8]
+    data = {'doc_id': doc_id, 'source': file.name,
+            'metadata': {}, 'tables': [], 'tags': [], 'images': []}
+    lines = []
+    with pdfplumber.open(file) as pdf:
+        for i, page in enumerate(pdf.pages):
+            txt = page.extract_text() or ''
+            page_lines = txt.splitlines()
+            lines.extend(page_lines)
+            logger.info(f'Page {i+1} lines count: {len(page_lines)}')
+            for idx, raw in enumerate(page.extract_tables()):
+                if raw and raw[0]:
+                    tbl = parse_table(raw)
+                    data['tables'].append({'page': i+1, 'table_index': idx+1, 'rows': tbl})
+    # images, tags, metadata same as before (omitted for brevity)
+    save_to_database(data)
+    return data
+
+    # Gradio 인터페이스
+# =============================================================================
+def app_ui(file, keyword):
+    data = process_pdf(file)
+    if keyword:
+        con = duckdb.connect(DB_DUCKDB)
+        # simple query example: keyword match in any column
+        df = con.execute(f"SELECT * FROM table_rows WHERE LOWER(CAST(table_rows.* AS VARCHAR)) LIKE '%{keyword.lower()}%' LIMIT 100").df()
+        con.close()
+        return df.to_dict(orient='records')
+    return data
+
+demo = gr.Interface(fn=app_ui,
+                    inputs=[gr.File(), gr.Textbox(label='Keyword')],
+                    outputs=[gr.JSON()],
+                    title='PDF to DuckDB')
+demo.launch()

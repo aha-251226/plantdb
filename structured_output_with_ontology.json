@@ -1,0 +1,300 @@
+{
+  "nodes": [
+    {
+      "id": "inst:Project_7T04",
+      "type": "entity",
+      "predicted_class": 1,
+      "ontology_class": "Project",
+      "ontology_match": "Project",
+      "confidence": 0.9
+    },
+    {
+      "id": "inst:Equipment_P2105",
+      "type": "entity",
+      "predicted_class": 1,
+      "ontology_class": "Equipment",
+      "ontology_match": "Equipment",
+      "confidence": 0.9
+    },
+    {
+      "id": "inst:ProcessReq_Temp",
+      "type": "entity",
+      "predicted_class": 1,
+      "ontology_class": "ProcessRequirement",
+      "ontology_match": "ProcessRequirement",
+      "confidence": 0.9
+    },
+    {
+      "id": "7T04",
+      "type": "literal",
+      "predicted_class": 2,
+      "ontology_class": "string",
+      "ontology_match": null,
+      "confidence": 0.0
+    },
+    {
+      "id": "P-2105 A/B",
+      "type": "literal",
+      "predicted_class": 2,
+      "ontology_class": "string",
+      "ontology_match": null,
+      "confidence": 0.0
+    },
+    {
+      "id": "384",
+      "type": "literal",
+      "predicted_class": 2,
+      "ontology_class": "decimal",
+      "ontology_match": null,
+      "confidence": 0.0
+    }
+  ],
+  "edges": [
+    {
+      "source": "inst:Project_7T04",
+      "target": "7T04",
+      "predicate": "ex:jobNo",
+      "property_type": "unknown"
+    },
+    {
+      "source": "inst:Project_7T04",
+      "target": "inst:Equipment_P2105",
+      "predicate": "ex:hasEquipment",
+      "property_type": "unknown"
+    },
+    {
+      "source": "inst:Equipment_P2105",
+      "target": "P-2105 A/B",
+      "predicate": "ex:itemNo",
+      "property_type": "unknown"
+    },
+    {
+      "source": "inst:Equipment_P2105",
+      "target": "inst:ProcessReq_Temp",
+      "predicate": "ex:hasProcessReq",
+      "property_type": "unknown"
+    },
+    {
+      "source": "inst:ProcessReq_Temp",
+      "target": "384",
+      "predicate": "ex:value",
+      "property_type": "unknown"
+    }
+  ],
+  "ontology_learning": {
+    "new_entities": {
+      "Project": [
+        "7T04"
+      ],
+      "Equipment": [
+        "PUMP",
+        "DRIVER",
+        "MOTOR",
+        "P-2105 A/B",
+        "CENTRIFUGAL"
+      ],
+      "ProcessRequirement": [
+        "384 ℃",
+        "17.1 kg/cm2",
+        "71.1 m3/h",
+        "1.0 cP"
+      ],
+      "Person": [
+        "SKL",
+        "HJL"
+      ]
+    },
+    "new_relations": [
+      {
+        "property": "hasEquipment",
+        "domain": "Project",
+        "range": "Equipment",
+        "instances": [
+          "7T04",
+          "PUMP"
+        ],
+        "confidence": 0.8
+      },
+      {
+        "property": "hasEquipment",
+        "domain": "Project",
+        "range": "Equipment",
+        "instances": [
+          "7T04",
+          "DRIVER"
+        ],
+        "confidence": 0.8
+      },
+      {
+        "property": "hasProcessReq",
+        "domain": "Equipment",
+        "range": "ProcessRequirement",
+        "instances": [
+          "PUMP",
+          "384 ℃"
+        ],
+        "confidence": 0.7
+      },
+      {
+        "property": "hasProcessReq",
+        "domain": "Equipment",
+        "range": "ProcessRequirement",
+        "instances": [
+          "PUMP",
+          "17.1 kg/cm2"
+        ],
+        "confidence": 0.7
+      },
+      {
+        "property": "hasProcessReq",
+        "domain": "Equipment",
+        "range": "ProcessRequirement",
+        "instances": [
+          "PUMP",
+          "71.1 m3/h"
+        ],
+        "confidence": 0.7
+      },
+      {
+        "property": "hasProcessReq",
+        "domain": "Equipment",
+        "range": "ProcessRequirement",
+        "instances": [
+          "DRIVER",
+          "384 ℃"
+        ],
+        "confidence": 0.7
+      },
+      {
+        "property": "hasProcessReq",
+        "domain": "Equipment",
+        "range": "ProcessRequirement",
+        "instances": [
+          "DRIVER",
+          "17.1 kg/cm2"
+        ],
+        "confidence": 0.7
+      },
+      {
+        "property": "hasProcessReq",
+        "domain": "Equipment",
+        "range": "ProcessRequirement",
+        "instances": [
+          "DRIVER",
+          "71.1 m3/h"
+        ],
+        "confidence": 0.7
+      },
+      {
+        "property": "reviewedBy",
+        "domain": "Revision",
+        "range": "Person",
+        "instances": [
+          "Rev_1",
+          "SKL"
+        ],
+        "confidence": 0.9
+      },
+      {
+        "property": "reviewedBy",
+        "domain": "Revision",
+        "range": "Person",
+        "instances": [
+          "Rev_1",
+          "HJL"
+        ],
+        "confidence": 0.9
+      }
+    ],
+    "patterns": {
+      "numerical_values": [
+        [
+          "2105",
+          "A"
+        ],
+        [
+          "71.1",
+          "m3/h"
+        ],
+        [
+          "384",
+          "℃"
+        ],
+        [
+          "17.1",
+          "kg/cm2"
+        ],
+        [
+          "1.0",
+          "cP"
+        ]
+      ],
+      "equipment_ids": [
+        "T04\n        P",
+        "P-2105 A/B"
+      ],
+      "project_ids": [
+        "Job No: 7T04",
+        "2105",
+        "2012"
+      ],
+      "key_value_pairs": [
+        [
+          "Project Specification Document\n",
+          "Job No"
+        ],
+        [
+          "Project Name",
+          "Centrifugal Pump Process Data\n        Equipment ID"
+        ],
+        [
+          "B\n        Pump Type",
+          "CENTRIFUGAL\n        Driver Type"
+        ],
+        [
+          "MOTO",
+          "R / MOTOR\n        Capacity"
+        ],
+        [
+          "AM Fe",
+          "ed"
+        ],
+        [
+          "Temperature",
+          "384 "
+        ],
+        [
+          "Pressure",
+          "17.1 kg/cm2A\n        Viscosity"
+        ],
+        [
+          "cP\n        Revision",
+          "14\n        Checked by"
+        ],
+        [
+          "SKL\n        Date",
+          "2012-12-26"
+        ]
+      ],
+      "person_names": [
+        "AM",
+        "SKL",
+        "ID",
+        "HJL"
+      ]
+    }
+  },
+  "summary": {
+    "total_nodes": 6,
+    "total_edges": 5,
+    "node_types": {
+      "literal": 3,
+      "entity": 3
+    },
+    "ontology_matches": {
+      "Equipment": 1,
+      "Project": 1,
+      "ProcessRequirement": 1
+    }
+  }
+}

@@ -1,0 +1,178 @@
+import os
+import json
+import base64
+import uuid
+import logging
+import re
+from io import BytesIO
+
+import pdfplumber
+import duckdb
+import pandas as pd
+import networkx as nx
+import dash
+from dash import dcc, html, Input, Output, State
+import dash_bootstrap_components as dbc
+from dash.exceptions import PreventUpdate
+import plotly.graph_objs as go
+
+# 환경 변수
+from dotenv import load_dotenv
+load_dotenv()
+DB_PATH = "extracted_documents.json"
+DB_DUCKDB = "plant_data.duckdb"
+EXPORT_DIR = "exported_json"
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logging.getLogger('pdfminer').setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
+
+# 디렉터리/파일 초기화
+os.makedirs(EXPORT_DIR, exist_ok=True)
+if not os.path.exists(DB_PATH):
+    with open(DB_PATH, 'w', encoding='utf-8') as f:
+        json.dump([], f)
+if not os.path.exists(DB_DUCKDB):
+    duckdb.connect(DB_DUCKDB).close()
+
+# 테이블 파싱 함수
+def parse_table(table):
+    filtered = []
+    for row in table:
+        if row and isinstance(row[0], str) and any(sym in row[0] for sym in ['●','◎','■','□']):
+            continue
+        filtered.append(row)
+    data_source = filtered or table
+    # 헤더 자동 인식
+    headers, data_rows = [], []
+    for idx, row in enumerate(data_source):
+        if sum(bool(c and str(c).strip()) for c in row) >= len(row)/2:
+            headers = [str(c).strip() or f"col_{i+1}" for i,c in enumerate(row)]
+            data_rows = data_source[idx+1:]
+            break
+    if not headers:
+        headers = [str(c).strip() or f"col_{i+1}" for i,c in enumerate(data_source[0])]
+        data_rows = data_source[1:]
+    # 구조화된 딕셔너리로 변환
+    return [ {headers[i] if i<len(headers) else f"col_{i+1}": cell for i,cell in enumerate(row)} for row in data_rows ]
+
+# 데이터 저장 함수
+def save_data(data):
+    with open(DB_PATH,'r',encoding='utf-8') as f:
+        db = json.load(f)
+    db.append(data)
+    with open(DB_PATH,'w',encoding='utf-8') as f:
+        json.dump(db, f, ensure_ascii=False, indent=2)
+    # DuckDB에 테이블 로드
+    records = []
+    for tbl in data['tables']:
+        for row in tbl['rows']:
+            rec = {'doc_id': data['doc_id'], 'page': tbl['page'], 'table_index': tbl['table_index']}
+            rec.update(row)
+            records.append(rec)
+    if records:
+        df = pd.DataFrame(records)
+        con = duckdb.connect(DB_DUCKDB)
+        con.register('tmp', df)
+        con.execute('CREATE OR REPLACE TABLE table_rows AS SELECT * FROM tmp')
+        con.close()
+
+# PDF 처리 함수
+def process_pdf(contents, filename):
+    if not contents:
+        raise PreventUpdate
+    content_type, b64 = contents.split(',')
+    raw = base64.b64decode(b64)
+    doc_id = str(uuid.uuid4())[:8]
+    data = {'doc_id': doc_id, 'source': filename, 'tables': [], 'raw_lines': [], 'tags': []}
+    with pdfplumber.open(BytesIO(raw)) as pdf:
+        for p, page in enumerate(pdf.pages):
+            text = page.extract_text() or ''
+            lines = text.splitlines()
+            data['raw_lines'].extend(lines)
+            for i, tbl in enumerate(page.extract_tables() or []):
+                if tbl and tbl[0]:
+                    data['tables'].append({'page': p+1, 'table_index': i+1, 'rows': parse_table(tbl)})
+    # 태그 추출 (예: ABC123)
+    tags = set()
+    for line in data['raw_lines']:
+        tags.update(re.findall(r"\b[A-Z]{2,4}[0-9]{1,4}\b", line))
+    data['tags'] = list(tags)
+    save_data(data)
+    return data
+
+# Dash 앱 레이아웃
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app.layout = dbc.Container([
+    dbc.Row([
+        dbc.Col([
+            html.H4("Controls", style={'color':'white'}),
+            dcc.Upload(id='upload', children=dbc.Button("Upload PDF", color='light'), accept='.pdf'),
+            html.Br(), html.Br(),
+            html.Label("SQL Query:", style={'color':'white'}),
+            dcc.Textarea(id='sql', style={'width':'100%','height':'100px'}),
+            html.Br(), dbc.Button('Run Query', id='run', color='success', className='mt-2')
+        ], width=3, style={'backgroundColor':'#001f3f','height':'100vh','padding':'20px','border-right':'2px solid #ccc'}),
+        dbc.Col(html.Div(id='main-content'), width=9)
+    ])
+], fluid=True)
+
+# 콜백: 업로드 또는 실행시 메인 콘텐츠 갱신
+@app.callback(
+    Output('main-content','children'),
+    [Input('upload','contents'), Input('run','n_clicks')],
+    [State('upload','filename'), State('sql','value')]
+)
+def update_page(contents, n_clicks, filename, sql):
+    if not contents:
+        raise PreventUpdate
+    data = process_pdf(contents, filename)
+    # DataFrame 생성
+    rows = []
+    for t in data['tables']:
+        for r in t['rows']:
+            rec = {'page': t['page'], 'table_index': t['table_index']}
+            rec.update(r)
+            rows.append(rec)
+    df = pd.DataFrame(rows) if rows else pd.DataFrame()
+    # 컬럼 스키마
+    schema = html.Ul([html.Li(c) for c in df.columns], style={'columnCount':2})
+    # ER 다이어그램 생성
+    G = nx.Graph()
+    G.add_node('rows')
+    for c in df.columns:
+        G.add_node(c)
+        G.add_edge('rows', c)
+    pos = nx.spring_layout(G)
+    edge_x, edge_y = [], []
+    for e in G.edges():
+        x0,y0 = pos[e[0]]; x1,y1 = pos[e[1]]
+        edge_x += [x0, x1, None]; edge_y += [y0, y1, None]
+    node_x = [pos[n][0] for n in G.nodes()]; node_y = [pos[n][1] for n in G.nodes()]
+    er_fig = go.Figure(data=[
+        go.Scatter(x=edge_x, y=edge_y, mode='lines', showlegend=False),
+        go.Scatter(x=node_x, y=node_y, mode='markers+text', text=list(G.nodes()), textposition='bottom center')
+    ])
+    # 테이블 뷰
+    tbl_view = dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True) if not df.empty else html.Div("No data")
+    # 쿼리 실행
+    result = None
+    if sql and sql.strip():
+        try:
+            con = duckdb.connect(DB_DUCKDB)
+            result_df = con.execute(sql).df()
+            result = result_df.to_dict('records')
+            con.close()
+        except Exception as e:
+            result = {'error': str(e)}
+    return html.Div([
+        html.H5('Raw Text Preview'), html.Pre('\n'.join(data['raw_lines'][:20]), style={'whiteSpace':'pre-wrap'}),
+        html.H5('Schema (Columns)'), schema,
+        html.H5('ER Diagram'), dcc.Graph(figure=er_fig),
+        html.H5('Data Table'), tbl_view,
+        html.H5('Query Result'), html.Pre(json.dumps(result, ensure_ascii=False, indent=2), style={'whiteSpace':'pre-wrap'})
+    ])
+
+if __name__=='__main__':
+    app.run()

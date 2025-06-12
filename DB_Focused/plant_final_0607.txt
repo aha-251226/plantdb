@@ -1,0 +1,1557 @@
+# 완전한 필드 추출기 - 모든 필드 비교 시스템
+# 핵심: 모든 필드 강제 추출, 필터링 없음, 완전 비교
+
+import streamlit as st
+import duckdb
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import json
+import os
+import io
+import re
+import hashlib
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple, Set
+import numpy as np
+from dataclasses import dataclass, asdict
+import traceback
+import warnings
+import logging
+from collections import defaultdict, Counter
+
+# 경고 필터링
+warnings.filterwarnings('ignore')
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# PDF 처리 라이브러리
+try:
+    import pdfplumber
+    import fitz  # PyMuPDF
+    PDF_LIBRARIES_AVAILABLE = True
+    logger.info("✅ PDF 처리 라이브러리 로드 완료")
+except ImportError:
+    PDF_LIBRARIES_AVAILABLE = False
+    logger.warning("❌ PDF 처리 라이브러리 없음")
+
+@dataclass
+class FieldContext:
+    """필드의 컨텍스트 정보"""
+    field_name: str
+    value: Any
+    bbox: Tuple[float, float, float, float]
+    page: int
+    confidence: float
+    context_type: str
+    extraction_method: str
+    parent_field: Optional[str] = None
+    conditions: Optional[Dict] = None
+    hierarchy_level: int = 0
+    font_info: Optional[Dict] = None
+    
+    def to_dict(self):
+        """안전한 딕셔너리 변환"""
+        try:
+            result = asdict(self)
+            if result.get('conditions') is None:
+                result['conditions'] = {}
+            if result.get('font_info') is None:
+                result['font_info'] = {}
+            if result.get('parent_field') is None:
+                result['parent_field'] = ""
+            
+            result['confidence'] = float(result['confidence'])
+            result['page'] = int(result['page'])
+            result['hierarchy_level'] = int(result['hierarchy_level'])
+            
+            return result
+        except Exception as e:
+            logger.error(f"FieldContext.to_dict() 오류: {e}")
+            return {
+                'field_name': str(self.field_name),
+                'value': str(self.value),
+                'bbox': (0, 0, 0, 0),
+                'page': 0,
+                'confidence': 0.50,  # 낮은 기본값
+                'context_type': 'simple',
+                'extraction_method': 'error_recovery',
+                'parent_field': "",
+                'conditions': {},
+                'hierarchy_level': 0,
+                'font_info': {}
+            }
+
+class ComprehensiveOntologyManager:
+    """포괄적 온톨로지 관리자 - 모든 필드 타입 지원"""
+    
+    def __init__(self):
+        # 🔧 모든 가능한 필드 패턴 정의 (확장)
+        self.field_patterns = {
+            # 기본 문서 정보
+            'job_no': ['job', 'job no', 'job number', 'job #', 'project no', 'jobno'],
+            'project': ['project', 'project name', 'project title', 'proj'],
+            'doc_no': ['doc', 'doc no', 'document', 'document no', 'document number', 'docno'],
+            'item_no': ['item', 'item no', 'item number', 'equipment id', 'tag', 'tag no'],
+            'client': ['client', 'customer', 'company', 'owner'],
+            'service': ['service', 'description', 'work', 'application', 'purpose'],
+            'page': ['page', 'page no', 'sheet'],
+            'rev': ['rev', 'revision', 'rev no', 'revision no'],
+            'location': ['location', 'site', 'plant', 'area'],
+            
+            # 장비 정보
+            'pump_type': ['pump type', 'pump', 'type of pump', 'pump typ'],
+            'driver_type': ['driver type', 'motor type', 'drive type', 'driver', 'motor'],
+            'required_type': ['required type', 'type required', 'configuration'],
+            'no_required': ['no required', 'number required', 'qty', 'quantity'],
+            'duty': ['duty', 'operation', 'service type'],
+            'operating': ['operating', 'operation', 'normal operation'],
+            'standby': ['standby', 'stand-by', 'spare'],
+            
+            # 프로세스 조건
+            'liquid_name': ['liquid name', 'fluid', 'fluid name', 'liquid', 'medium'],
+            'fluid_type': ['fluid type', 'liquid type', 'medium type'],
+            'pumping_temperature': ['pumping temperature', 'temperature', 'temp', 'operating temp'],
+            'vapor_pressure': ['vapor pressure', 'vapour pressure', 'vp'],
+            'specific_gravity': ['specific gravity', 'sg', 's.g.', 'density', 'sp gr'],
+            'viscosity': ['viscosity', 'visc', 'dynamic viscosity'],
+            'capacity': ['capacity', 'flow', 'flow rate', 'flowrate', 'rate'],
+            'suction_pressure': ['suction pressure', 'suction press', 'inlet pressure'],
+            'discharge_pressure': ['discharge pressure', 'discharge press', 'outlet pressure'],
+            'differential_pressure': ['differential pressure', 'diff pressure', 'head'],
+            'differential_head': ['differential head', 'total head', 'head'],
+            'npsh': ['npsh', 'npsha', 'npsh available', 'net positive suction head'],
+            
+            # 조건 타입
+            'normal': ['normal', 'norm', 'operating', 'design'],
+            'maximum': ['maximum', 'max', 'peak'],
+            'minimum': ['minimum', 'min', 'lowest'],
+            'rated': ['rated', 'design', 'nominal'],
+            
+            # 재질 정보
+            'material': ['material', 'mat', 'construction', 'material selection'],
+            'casing': ['casing', 'case', 'housing'],
+            'impeller': ['impeller', 'rotor'],
+            'shaft': ['shaft', 'spindle'],
+            'corrosion_allowance': ['corrosion allowance', 'corr allowance', 'ca'],
+            
+            # 운전 조건
+            'method_of_starting': ['method of starting', 'starting method', 'start method'],
+            'manual': ['manual', 'hand'],
+            'automatic': ['automatic', 'auto'],
+            'characteristics': ['characteristics', 'properties', 'property'],
+            'flammable': ['flammable', 'combustible'],
+            'toxic': ['toxic', 'poisonous'],
+            'insulation': ['insulation', 'insul'],
+            'steam_tracing': ['steam tracing', 'tracing'],
+            'indoor': ['indoor', 'inside'],
+            'outdoor': ['outdoor', 'outside'],
+            'leakage': ['leakage', 'leak'],
+            
+            # 기타
+            'notes': ['notes', 'note', 'remarks', 'comment'],
+            'continuous': ['continuous', 'cont'],
+            'intermittent': ['intermittent', 'int'],
+            'horizontal': ['horizontal', 'horiz'],
+            'vertical': ['vertical', 'vert'],
+            'centrifugal': ['centrifugal', 'centri'],
+            
+            # Feed 타입
+            'am_feed': ['am feed', 'am_feed', 'amfeed'],
+            'ah_feed': ['ah feed', 'ah_feed', 'ahfeed'],
+            'overflash': ['overflash', 'over flash'],
+            
+            # 단위 및 측정값
+            'temperature_c': ['°c', 'deg c', 'celsius'],
+            'pressure_kgcm2': ['kg/cm2', 'kg/cm2a', 'kg/cm2g'],
+            'flow_m3h': ['m3/h', 'm3/hr', 'cubic meter per hour'],
+            'viscosity_cp': ['cp', 'centipoise'],
+            'meter': ['m', 'meter', 'metre'],
+            
+            # API 클래스
+            'api_class': ['api class', 'api', 'class'],
+            'a8': ['a-8', 'a8', 'class a-8'],
+            
+            # 기본 분류
+            'field': ['field', 'parameter', 'item', 'property'],
+            'value': ['value', 'data', 'measurement', 'reading'],
+            'specification': ['specification', 'spec', 'requirement']
+        }
+        
+        logger.info(f"✅ 포괄적 온톨로지 로드 완료: {len(self.field_patterns)} 필드 타입")
+    
+    def map_field_to_ontology(self, field_candidate: str) -> str:
+        """포괄적 필드 매핑 - 모든 패턴 시도"""
+        try:
+            if not field_candidate:
+                return "Unknown_Field"
+            
+            field_lower = str(field_candidate).lower().strip()
+            
+            # 🔧 모든 패턴 체크 (순서 중요)
+            best_matches = []
+            
+            for ontology_field, patterns in self.field_patterns.items():
+                for pattern in patterns:
+                    # 완전 일치
+                    if pattern == field_lower:
+                        return ontology_field.upper()
+                    
+                    # 포함 관계
+                    if pattern in field_lower or field_lower in pattern:
+                        score = len(pattern) / max(len(pattern), len(field_lower))
+                        best_matches.append((ontology_field.upper(), score))
+            
+            # 최고 점수 반환
+            if best_matches:
+                best_matches.sort(key=lambda x: x[1], reverse=True)
+                return best_matches[0][0]
+            
+            # 🔧 매핑 실패시에도 정규화된 원본 사용 (절대 버리지 않음)
+            normalized = re.sub(r'[^\w\s]', '_', field_candidate)
+            normalized = re.sub(r'\s+', '_', normalized.strip())
+            normalized = re.sub(r'^\d+\s*', '', normalized)  # 앞의 숫자 제거
+            
+            return normalized.upper() if normalized else "UNNAMED_FIELD"
+            
+        except Exception as e:
+            logger.error(f"필드 매핑 오류: {e}")
+            return f"ERROR_FIELD_{abs(hash(str(field_candidate))) % 1000}"
+
+class MaximumExtractorProcessor:
+    """최대 추출 프로세서 - 모든 가능한 필드 추출"""
+    
+    def __init__(self, ontology_manager):
+        self.ontology = ontology_manager
+        
+        # 🔧 최대 추출 설정
+        self.confidence_threshold = 0.15  # 매우 낮은 임계값
+        self.min_confidence = 0.20  # 최소 보장 신뢰도
+        
+        # 🔧 필터링 완전 제거
+        self.enable_filtering = False  # 필터링 비활성화
+        
+        # 🔧 모든 패턴 포함 (확장된 패턴)
+        self.all_patterns = [
+            # 기본 콜론/등호 패턴
+            r'([A-Za-z][A-Za-z\s\(\)]{1,40})\s*[:=]\s*([^\n\r:=]{1,100})',
+            # 번호. 패턴
+            r'(\d+\.?\s*[A-Za-z][A-Za-z\s\(\)]{1,40})\s+([^\n\r\d]{1,100})',
+            # 대시 패턴
+            r'([A-Z][A-Z\s]{2,30})\s*[-–—]\s*([^\n\r-]{1,100})',
+            # 괄호 패턴
+            r'([A-Za-z][A-Za-z\s]{1,30})\s*\(\s*([^)]{1,50})\s*\)',
+            # 탭 구분
+            r'([A-Za-z][A-Za-z\s]{1,30})\t+([^\n\r\t]{1,100})',
+            # 공백 구분 (대문자)
+            r'([A-Z]{2,})\s+([A-Za-z0-9][A-Za-z0-9\s\.,/-]{1,80})',
+            # 단순 패턴
+            r'([A-Za-z]{3,20})\s*:\s*([A-Za-z0-9\s\.,/-]{1,50})',
+            # 체크박스 패턴
+            r'([■□☑☐▣])\s*([A-Za-z][A-Za-z\s]{1,30})',
+            # API 클래스 패턴
+            r'(API\s+CLASS)\s+([A-Z0-9\-]+)',
+            # 온도 패턴
+            r'(\d+\.?\d*)\s*(°?[CF]|DEG)',
+            # 압력 패턴
+            r'(\d+\.?\d*)\s*(kg/cm2[AG]?|PSI|BAR)',
+            # 유량 패턴
+            r'(\d+\.?\d*)\s*(m3/h|M3/HR|GPM)',
+            # 점도 패턴
+            r'(\d+\.?\d*)\s*(cP|CP|cSt)',
+            # 비중 패턴
+            r'(\d+\.?\d*)\s*(SG|S\.G\.)',
+            # 퍼센트 패턴
+            r'(\d+\.?\d*)\s*(%|WT%|wt%)',
+            # 미터 패턴
+            r'(\d+\.?\d*)\s*(m|M|meter)',
+            # 날짜 패턴
+            r'(\d{4}[-/]\d{2}[-/]\d{2})',
+            # 시간 패턴
+            r'(\d{1,2}:\d{2})',
+            # 코드 패턴
+            r'([A-Z]{1,5}\d{2,6}[A-Z]*)',
+            # 식별자 패턴
+            r'([A-Z]+-\d+[A-Z]*)',
+            # 노트 번호 패턴
+            r'(NOTE\s+\d+)',
+            # 페이지 패턴
+            r'(\d+\s+OF\s+\d+)',
+            # 리비전 패턴
+            r'(REV\.?\s*\d+[A-Z]*)',
+        ]
+        
+        logger.info(f"✅ 최대 추출 프로세서 초기화 - 패턴: {len(self.all_patterns)}개")
+    
+    def extract_all_possible_fields(self, file_content: bytes, filename: str) -> Dict[str, Any]:
+        """모든 가능한 필드 추출 - 필터링 없음"""
+        debug_info = {
+            'filename': filename,
+            'total_patterns_used': len(self.all_patterns),
+            'filtering_disabled': True,
+            'fields_at_each_step': {},
+            'extraction_stats': {}
+        }
+        
+        try:
+            logger.info(f"🚀 최대 추출 시작: {filename}")
+            
+            # 1. 메타데이터
+            metadata = self._extract_metadata(file_content)
+            
+            # 2. 🔧 모든 페이지 전체 스캔 (제한 없음)
+            all_fields = {}
+            
+            # 공간적 추출 (모든 페이지)
+            spatial_results = self._extract_all_spatial_fields(file_content)
+            all_fields.update(spatial_results)
+            debug_info['fields_at_each_step']['spatial'] = len(spatial_results)
+            logger.info(f"✅ 공간적 추출: {len(spatial_results)} 필드")
+            
+            # 테이블 추출 (모든 테이블)
+            table_results = self._extract_all_table_fields(file_content)
+            all_fields.update(table_results)
+            debug_info['fields_at_each_step']['table'] = len(table_results)
+            logger.info(f"✅ 테이블 추출: {len(table_results)} 필드")
+            
+            # 텍스트 라인 추출
+            text_results = self._extract_all_text_lines(file_content)
+            all_fields.update(text_results)
+            debug_info['fields_at_each_step']['text'] = len(text_results)
+            logger.info(f"✅ 텍스트 라인 추출: {len(text_results)} 필드")
+            
+            # 패턴 추출 (모든 패턴)
+            pattern_results = self._extract_all_patterns(file_content)
+            all_fields.update(pattern_results)
+            debug_info['fields_at_each_step']['pattern'] = len(pattern_results)
+            logger.info(f"✅ 패턴 추출: {len(pattern_results)} 필드")
+            
+            # 단어 추출 (의미있는 단어들)
+            word_results = self._extract_meaningful_words(file_content)
+            all_fields.update(word_results)
+            debug_info['fields_at_each_step']['word'] = len(word_results)
+            logger.info(f"✅ 단어 추출: {len(word_results)} 필드")
+            
+            # 3. 🔧 온톨로지 매핑 (모든 필드)
+            mapped_fields = {}
+            for field_id, context in all_fields.items():
+                try:
+                    if isinstance(context, FieldContext):
+                        # 온톨로지 매핑
+                        mapped_name = self.ontology.map_field_to_ontology(context.field_name)
+                        context.field_name = mapped_name
+                        
+                        # 🔧 신뢰도 보장 (최소값 보장)
+                        context.confidence = max(self.min_confidence, context.confidence)
+                        
+                        mapped_fields[field_id] = context
+                except Exception as e:
+                    logger.debug(f"매핑 오류 {field_id}: {e}")
+                    mapped_fields[field_id] = context
+            
+            debug_info['fields_at_each_step']['mapped'] = len(mapped_fields)
+            logger.info(f"✅ 온톨로지 매핑: {len(mapped_fields)} 필드")
+            
+            # 4. 🔧 최종 결과 생성 (필터링 없음)
+            doc_id = f"doc_{hashlib.md5(filename.encode()).hexdigest()[:8]}"
+            processed_fields = []
+            
+            for field_id, context in mapped_fields.items():
+                try:
+                    field_data = context.to_dict()
+                    field_data['doc_id'] = doc_id
+                    processed_fields.append(field_data)
+                except Exception as e:
+                    logger.debug(f"필드 처리 오류 {field_id}: {e}")
+            
+            confidences = [f.get('confidence', self.min_confidence) for f in processed_fields]
+            avg_confidence = float(np.mean(confidences)) if confidences else self.min_confidence
+            
+            debug_info['extraction_stats'] = {
+                'total_extracted': len(all_fields),
+                'total_mapped': len(mapped_fields),
+                'total_final': len(processed_fields),
+                'filtering_applied': False,
+                'avg_confidence': avg_confidence
+            }
+            
+            logger.info(f"✅ 최대 추출 완료: {len(processed_fields)} 필드")
+            
+            return {
+                'doc_id': doc_id,
+                'extracted_fields': processed_fields,
+                'metadata': metadata,
+                'total_confidence': avg_confidence,
+                'extraction_summary': {
+                    'total_fields': len(processed_fields),
+                    'high_confidence_fields': sum(1 for f in processed_fields if f.get('confidence', 0) > 0.70),
+                    'extraction_methods_used': ['spatial', 'table', 'text', 'pattern', 'word'],
+                    'context_types': dict(Counter(f.get('context_type', 'unknown') for f in processed_fields)),
+                    'debug_info': debug_info
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 최대 추출 실패: {e}")
+            return self._create_minimal_error_result(filename, str(e))
+    
+    def _extract_metadata(self, file_content: bytes) -> Dict:
+        """메타데이터 추출"""
+        try:
+            if PDF_LIBRARIES_AVAILABLE:
+                doc = fitz.open(stream=file_content, filetype="pdf")
+                return {'page_count': len(doc)}
+            return {'page_count': 1}
+        except Exception:
+            return {'page_count': 1}
+    
+    def _extract_all_spatial_fields(self, file_content: bytes) -> Dict[str, FieldContext]:
+        """모든 공간적 필드 추출 - 제한 없음"""
+        results = {}
+        
+        if not PDF_LIBRARIES_AVAILABLE:
+            return results
+        
+        try:
+            with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                # 🔧 모든 페이지 처리 (제한 없음)
+                for page_num, page in enumerate(pdf.pages):
+                    page_text = page.extract_text()
+                    if not page_text:
+                        continue
+                    
+                    # 단어별 위치 정보
+                    words = page.extract_words()
+                    
+                    # 🔧 모든 패턴 시도
+                    for pattern_idx, pattern in enumerate(self.all_patterns):
+                        try:
+                            matches = re.finditer(pattern, page_text, re.IGNORECASE | re.MULTILINE)
+                            
+                            for match_idx, match in enumerate(matches):
+                                groups = match.groups()
+                                if len(groups) >= 1:
+                                    if len(groups) >= 2:
+                                        key, value = groups[0], groups[1]
+                                    else:
+                                        key, value = f"PATTERN_{pattern_idx}", groups[0]
+                                    
+                                    # 🔧 모든 쌍 허용 (최소 검증만)
+                                    if self._is_minimal_valid(key, value):
+                                        field_id = f"spatial_{page_num}_{pattern_idx}_{match_idx}"
+                                        
+                                        results[field_id] = FieldContext(
+                                            field_name=str(key).strip(),
+                                            value=str(value).strip(),
+                                            bbox=(0, 0, 100, 100),
+                                            page=page_num,
+                                            confidence=self._calculate_base_confidence('spatial'),
+                                            context_type='spatial',
+                                            extraction_method='spatial_maximum'
+                                        )
+                        
+                        except Exception:
+                            continue
+                    
+                    # 단어 기반 키-값 쌍
+                    if words:
+                        word_pairs = self._extract_word_pairs(words, page_num)
+                        results.update(word_pairs)
+        
+        except Exception as e:
+            logger.error(f"공간적 추출 오류: {e}")
+        
+        return results
+    
+    def _extract_all_table_fields(self, file_content: bytes) -> Dict[str, FieldContext]:
+        """모든 테이블 필드 추출 - 제한 없음"""
+        results = {}
+        
+        if not PDF_LIBRARIES_AVAILABLE:
+            return results
+        
+        try:
+            with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                # 🔧 모든 페이지의 모든 테이블
+                for page_num, page in enumerate(pdf.pages):
+                    tables = page.extract_tables()
+                    if not tables:
+                        continue
+                    
+                    # 🔧 모든 테이블 처리
+                    for table_idx, table in enumerate(tables):
+                        if not table or len(table) < 1:
+                            continue
+                        
+                        # 🔧 모든 행을 헤더로 시도
+                        for header_idx in range(min(len(table), 3)):
+                            header_row = table[header_idx]
+                            if not header_row:
+                                continue
+                            
+                            # 🔧 모든 데이터 행 처리
+                            for row_idx in range(len(table)):
+                                if row_idx == header_idx:
+                                    continue
+                                
+                                row = table[row_idx]
+                                if not row:
+                                    continue
+                                
+                                # 🔧 모든 셀 조합
+                                for col_idx in range(min(len(header_row), len(row))):
+                                    header_cell = header_row[col_idx]
+                                    data_cell = row[col_idx]
+                                    
+                                    if header_cell and data_cell:
+                                        header_str = str(header_cell).strip()
+                                        data_str = str(data_cell).strip()
+                                        
+                                        if self._is_minimal_valid(header_str, data_str):
+                                            field_id = f"table_{page_num}_{table_idx}_{header_idx}_{row_idx}_{col_idx}"
+                                            
+                                            results[field_id] = FieldContext(
+                                                field_name=header_str,
+                                                value=data_str,
+                                                bbox=(0, 0, 0, 0),
+                                                page=page_num,
+                                                confidence=self._calculate_base_confidence('table'),
+                                                context_type='table',
+                                                extraction_method='table_maximum'
+                                            )
+        
+        except Exception as e:
+            logger.error(f"테이블 추출 오류: {e}")
+        
+        return results
+    
+    def _extract_all_text_lines(self, file_content: bytes) -> Dict[str, FieldContext]:
+        """모든 텍스트 라인 추출"""
+        results = {}
+        
+        if not PDF_LIBRARIES_AVAILABLE:
+            return results
+        
+        try:
+            with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                for page_num, page in enumerate(pdf.pages):
+                    page_text = page.extract_text()
+                    if not page_text:
+                        continue
+                    
+                    # 🔧 모든 라인 처리
+                    lines = page_text.split('\n')
+                    for line_idx, line in enumerate(lines):
+                        line = line.strip()
+                        if len(line) > 2:  # 최소 길이만 체크
+                            # 라인을 필드로 추출
+                            field_id = f"text_line_{page_num}_{line_idx}"
+                            
+                            # 콜론이 있으면 분리 시도
+                            if ':' in line:
+                                parts = line.split(':', 1)
+                                if len(parts) == 2:
+                                    key, value = parts[0].strip(), parts[1].strip()
+                                    if self._is_minimal_valid(key, value):
+                                        results[field_id] = FieldContext(
+                                            field_name=key,
+                                            value=value,
+                                            bbox=(0, 0, 0, 0),
+                                            page=page_num,
+                                            confidence=self._calculate_base_confidence('text'),
+                                            context_type='text_line',
+                                            extraction_method='text_line'
+                                        )
+                            else:
+                                # 전체 라인을 값으로 사용
+                                results[field_id] = FieldContext(
+                                    field_name=f"TEXT_LINE_{line_idx}",
+                                    value=line,
+                                    bbox=(0, 0, 0, 0),
+                                    page=page_num,
+                                    confidence=self._calculate_base_confidence('text'),
+                                    context_type='text_content',
+                                    extraction_method='text_line'
+                                )
+        
+        except Exception as e:
+            logger.error(f"텍스트 라인 추출 오류: {e}")
+        
+        return results
+    
+    def _extract_all_patterns(self, file_content: bytes) -> Dict[str, FieldContext]:
+        """모든 패턴 추출"""
+        results = {}
+        
+        if not PDF_LIBRARIES_AVAILABLE:
+            return results
+        
+        try:
+            with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                all_text = ""
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        all_text += page_text + "\n"
+                
+                if not all_text:
+                    return results
+                
+                # 🔧 특수 패턴들 추가 검색
+                special_patterns = {
+                    'feed_types': r'(AM\s+FEED|AH\s+FEED|AM_FEED|AH_FEED)',
+                    'api_classes': r'(API\s+CLASS\s+[A-Z0-9\-]+)',
+                    'materials': r'(CASING|IMPELLER|SHAFT)\s*([A-Z0-9\s\-]+)',
+                    'checkboxes': r'([■□☑☐])\s*([A-Z][A-Z\s]+)',
+                    'units': r'(\d+\.?\d*)\s*([A-Za-z°/%]+)',
+                    'codes': r'([A-Z]{2,4}-[0-9A-Z\-]+)',
+                    'dates': r'(\d{4}-\d{2}-\d{2})',
+                    'revisions': r'(REV\.?\s*\d+[A-Z]*)',
+                    'pages': r'(\d+\s+OF\s+\d+)',
+                    'notes': r'(NOTE\s+\d+)',
+                    'percentages': r'(\d+\.?\d*)\s*(%|WT%)',
+                    'temperatures': r'(\d+\.?\d*)\s*(°?[CF]|DEG)',
+                    'pressures': r'(\d+\.?\d*)\s*(PSI|BAR|kg/cm2)',
+                    'flows': r'(\d+\.?\d*)\s*(m3/h|GPM|L/S)',
+                }
+                
+                for category, pattern in special_patterns.items():
+                    matches = re.finditer(pattern, all_text, re.IGNORECASE | re.MULTILINE)
+                    
+                    for match_idx, match in enumerate(matches):
+                        groups = match.groups()
+                        if groups:
+                            if len(groups) >= 2:
+                                key, value = groups[0], groups[1]
+                            else:
+                                key, value = category.upper(), groups[0]
+                            
+                            field_id = f"pattern_{category}_{match_idx}"
+                            
+                            results[field_id] = FieldContext(
+                                field_name=str(key).strip(),
+                                value=str(value).strip(),
+                                bbox=(0, 0, 0, 0),
+                                page=0,
+                                confidence=self._calculate_base_confidence('pattern'),
+                                context_type='pattern',
+                                extraction_method=f'pattern_{category}'
+                            )
+        
+        except Exception as e:
+            logger.error(f"패턴 추출 오류: {e}")
+        
+        return results
+    
+    def _extract_meaningful_words(self, file_content: bytes) -> Dict[str, FieldContext]:
+        """의미있는 단어 추출"""
+        results = {}
+        
+        if not PDF_LIBRARIES_AVAILABLE:
+            return results
+        
+        try:
+            with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                all_text = ""
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        all_text += page_text + " "
+                
+                # 🔧 의미있는 단어 추출
+                words = re.findall(r'\b[A-Z]{2,}[A-Z0-9\-]*\b', all_text)
+                word_counts = Counter(words)
+                
+                # 🔧 자주 나오는 단어들을 필드로 사용
+                for word_idx, (word, count) in enumerate(word_counts.most_common(100)):
+                    if len(word) >= 2 and count >= 1:
+                        field_id = f"word_{word_idx}"
+                        
+                        results[field_id] = FieldContext(
+                            field_name=word,
+                            value=f"Found {count} times",
+                            bbox=(0, 0, 0, 0),
+                            page=0,
+                            confidence=self._calculate_base_confidence('word'),
+                            context_type='word',
+                            extraction_method='word_extraction'
+                        )
+        
+        except Exception as e:
+            logger.error(f"단어 추출 오류: {e}")
+        
+        return results
+    
+    def _extract_word_pairs(self, words: List[Dict], page_num: int) -> Dict[str, FieldContext]:
+        """단어 기반 키-값 쌍 추출"""
+        results = {}
+        
+        try:
+            for i, word in enumerate(words):
+                text = word['text']
+                
+                # 🔧 모든 가능한 키 후보
+                if len(text) >= 2:
+                    # 다음 단어들을 값으로 시도
+                    for j in range(i + 1, min(i + 5, len(words))):
+                        next_word = words[j]
+                        next_text = next_word['text']
+                        
+                        if len(next_text) >= 1:
+                            field_id = f"word_pair_{page_num}_{i}_{j}"
+                            
+                            results[field_id] = FieldContext(
+                                field_name=text,
+                                value=next_text,
+                                bbox=(word['x0'], word['top'], next_word['x1'], next_word['bottom']),
+                                page=page_num,
+                                confidence=self._calculate_base_confidence('word_pair'),
+                                context_type='word_pair',
+                                extraction_method='word_pair'
+                            )
+        
+        except Exception as e:
+            logger.debug(f"단어 쌍 추출 오류: {e}")
+        
+        return results
+    
+    def _is_minimal_valid(self, key: str, value: str) -> bool:
+        """최소한의 유효성 검증만"""
+        try:
+            key_str = str(key).strip()
+            value_str = str(value).strip()
+            
+            # 🔧 매우 관대한 조건
+            return (len(key_str) >= 1 and len(value_str) >= 1 and
+                   len(key_str) <= 200 and len(value_str) <= 500 and
+                   key_str != value_str)
+        except Exception:
+            return False
+    
+    def _calculate_base_confidence(self, method: str) -> float:
+        """기본 신뢰도 계산"""
+        base_confidences = {
+            'spatial': 0.60,
+            'table': 0.70,
+            'text': 0.50,
+            'pattern': 0.65,
+            'word': 0.40,
+            'word_pair': 0.45
+        }
+        
+        return base_confidences.get(method, self.min_confidence)
+    
+    def _create_minimal_error_result(self, filename: str, error_msg: str) -> Dict:
+        """최소 오류 결과"""
+        return {
+            'doc_id': f"error_{hashlib.md5(filename.encode()).hexdigest()[:8]}",
+            'extracted_fields': [],
+            'metadata': {'error': error_msg, 'page_count': 1},
+            'total_confidence': 0.0,
+            'extraction_summary': {
+                'total_fields': 0,
+                'high_confidence_fields': 0,
+                'extraction_methods_used': [],
+                'context_types': {},
+                'error': error_msg
+            }
+        }
+
+# 🔧 완전 비교 시스템
+class CompleteComparisonSystem:
+    """완전한 문서 비교 시스템"""
+    
+    def __init__(self, db_manager):
+        self.db = db_manager
+        logger.info("✅ 완전 비교 시스템 초기화")
+    
+    def generate_complete_comparison_matrix(self) -> pd.DataFrame:
+        """완전한 비교 매트릭스 생성"""
+        try:
+            # 🔧 모든 문서의 모든 필드 가져오기
+            all_fields_query = """
+                SELECT 
+                    d.filename,
+                    ef.field_name,
+                    ef.field_value,
+                    ef.confidence,
+                    ef.extraction_method,
+                    ef.context_type
+                FROM extracted_fields ef
+                JOIN documents d ON ef.doc_id = d.doc_id
+                ORDER BY ef.field_name, d.filename
+            """
+            
+            all_fields_df = self.db.execute_query(all_fields_query)
+            
+            if all_fields_df.empty:
+                return pd.DataFrame()
+            
+            # 🔧 모든 고유 필드명 수집
+            all_unique_fields = set(all_fields_df['field_name'].unique())
+            all_documents = list(all_fields_df['filename'].unique())
+            
+            logger.info(f"📊 비교 매트릭스: {len(all_unique_fields)} 필드 x {len(all_documents)} 문서")
+            
+            # 🔧 완전한 비교 매트릭스 생성
+            comparison_matrix = []
+            
+            for field_name in sorted(all_unique_fields):
+                row_data = {'Field_Name': field_name}
+                
+                # 각 문서별로 해당 필드 값 찾기
+                for doc_name in all_documents:
+                    field_data = all_fields_df[
+                        (all_fields_df['field_name'] == field_name) & 
+                        (all_fields_df['filename'] == doc_name)
+                    ]
+                    
+                    if not field_data.empty:
+                        # 값이 있는 경우
+                        value = field_data.iloc[0]['field_value']
+                        confidence = field_data.iloc[0]['confidence']
+                        row_data[f"{doc_name}_Value"] = value
+                        row_data[f"{doc_name}_Confidence"] = confidence
+                        row_data[f"{doc_name}_Status"] = "✅ 있음"
+                    else:
+                        # 값이 없는 경우
+                        row_data[f"{doc_name}_Value"] = "❌ 값 없음"
+                        row_data[f"{doc_name}_Confidence"] = 0.0
+                        row_data[f"{doc_name}_Status"] = "❌ 없음"
+                
+                # 🔧 필드별 비교 통계 계산
+                values = [row_data.get(f"{doc}_Value", "") for doc in all_documents]
+                non_empty_values = [v for v in values if v != "❌ 값 없음"]
+                
+                if len(non_empty_values) > 1:
+                    # 값들이 모두 같은지 확인
+                    unique_values = set(non_empty_values)
+                    if len(unique_values) == 1:
+                        row_data['Comparison_Result'] = "🟢 모든 값 동일"
+                    else:
+                        row_data['Comparison_Result'] = f"🔴 값 차이 ({len(unique_values)}개 다른 값)"
+                elif len(non_empty_values) == 1:
+                    row_data['Comparison_Result'] = "🟡 1개 문서에만 있음"
+                else:
+                    row_data['Comparison_Result'] = "⚫ 모든 문서에서 없음"
+                
+                row_data['Documents_With_Field'] = len(non_empty_values)
+                row_data['Total_Documents'] = len(all_documents)
+                
+                comparison_matrix.append(row_data)
+            
+            return pd.DataFrame(comparison_matrix)
+            
+        except Exception as e:
+            logger.error(f"비교 매트릭스 생성 오류: {e}")
+            return pd.DataFrame()
+    
+    def save_comparison_results(self, comparison_df: pd.DataFrame):
+        """비교 결과 저장"""
+        try:
+            # 🔧 비교 결과 테이블 생성
+            self.db.conn.execute("""
+                CREATE TABLE IF NOT EXISTS field_comparisons (
+                    id INTEGER PRIMARY KEY,
+                    field_name VARCHAR NOT NULL,
+                    comparison_result VARCHAR,
+                    documents_with_field INTEGER,
+                    total_documents INTEGER,
+                    comparison_data JSON,
+                    created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 기존 데이터 삭제
+            self.db.conn.execute("DELETE FROM field_comparisons")
+            
+            # 새로운 비교 결과 저장
+            for _, row in comparison_df.iterrows():
+                comparison_data = row.to_dict()
+                
+                self.db.conn.execute("""
+                    INSERT INTO field_comparisons (
+                        field_name, comparison_result, documents_with_field, 
+                        total_documents, comparison_data
+                    ) VALUES (?, ?, ?, ?, ?)
+                """, [
+                    row['Field_Name'],
+                    row.get('Comparison_Result', ''),
+                    row.get('Documents_With_Field', 0),
+                    row.get('Total_Documents', 0),
+                    json.dumps(comparison_data)
+                ])
+            
+            logger.info(f"✅ 비교 결과 저장 완료: {len(comparison_df)} 필드")
+            
+        except Exception as e:
+            logger.error(f"비교 결과 저장 오류: {e}")
+
+# DuckDB 매니저 (확장된 스키마)
+class AdvancedDuckDBManager:
+    """고급 DuckDB 매니저 - 비교 기능 포함"""
+    
+    def __init__(self, db_path: str = "plant_documents.db"):
+        self.db_path = db_path
+        try:
+            self.conn = duckdb.connect(db_path)
+            self.init_database()
+            logger.info(f"데이터베이스 연결 성공: {db_path}")
+        except Exception as e:
+            logger.error(f"데이터베이스 연결 실패: {e}")
+            self.conn = duckdb.connect(":memory:")
+            self.db_path = ":memory:"
+            self.init_database()
+    
+    def init_database(self):
+        """확장된 데이터베이스 스키마"""
+        try:
+            # 문서 테이블
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS documents (
+                    doc_id VARCHAR PRIMARY KEY,
+                    filename VARCHAR NOT NULL,
+                    upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    file_size INTEGER,
+                    page_count INTEGER,
+                    total_confidence DECIMAL(4,3),
+                    total_fields INTEGER,
+                    metadata JSON
+                )
+            """)
+            
+            # 필드 테이블
+            self.conn.execute("""
+                CREATE SEQUENCE IF NOT EXISTS extracted_fields_seq START 1
+            """)
+            
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS extracted_fields (
+                    id INTEGER PRIMARY KEY DEFAULT nextval('extracted_fields_seq'),
+                    doc_id VARCHAR,
+                    field_name VARCHAR NOT NULL,
+                    field_value TEXT,
+                    confidence DECIMAL(5,4),
+                    extraction_method VARCHAR,
+                    page_number INTEGER,
+                    bbox_x1 DECIMAL(10,3),
+                    bbox_y1 DECIMAL(10,3),
+                    bbox_x2 DECIMAL(10,3),
+                    bbox_y2 DECIMAL(10,3),
+                    context_type VARCHAR,
+                    hierarchy_level INTEGER DEFAULT 0,
+                    parent_field VARCHAR,
+                    conditions JSON,
+                    font_info JSON,
+                    extraction_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+                )
+            """)
+            
+            # 🔧 비교 결과 테이블 추가
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS field_comparisons (
+                    id INTEGER PRIMARY KEY,
+                    field_name VARCHAR NOT NULL,
+                    comparison_result VARCHAR,
+                    documents_with_field INTEGER,
+                    total_documents INTEGER,
+                    comparison_data JSON,
+                    created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 인덱스 생성
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc_id ON extracted_fields(doc_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_extracted_fields_name ON extracted_fields(field_name)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_field_comparisons_name ON field_comparisons(field_name)")
+            
+            logger.info("확장된 데이터베이스 스키마 초기화 완료")
+            
+        except Exception as e:
+            logger.error(f"데이터베이스 초기화 실패: {e}")
+    
+    def insert_document_with_metadata(self, doc_id: str, filename: str, file_size: int, extraction_result: Dict):
+        """문서 메타데이터 저장"""
+        try:
+            metadata_json = json.dumps(extraction_result.get('metadata', {}))
+            total_fields = len(extraction_result.get('extracted_fields', []))
+            
+            self.conn.execute("""
+                INSERT OR REPLACE INTO documents (
+                    doc_id, filename, file_size, page_count, total_confidence, total_fields, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, [
+                doc_id, filename, file_size,
+                extraction_result.get('metadata', {}).get('page_count', 1),
+                extraction_result.get('total_confidence', 0.0),
+                total_fields,
+                metadata_json
+            ])
+            
+        except Exception as e:
+            logger.error(f"문서 메타데이터 저장 실패: {e}")
+    
+    def insert_extracted_fields_batch(self, fields_data: List[Dict]):
+        """필드 데이터 일괄 저장"""
+        try:
+            batch_data = []
+            for field in fields_data:
+                try:
+                    conditions_json = json.dumps(field.get('conditions', {}))
+                    font_info_json = json.dumps(field.get('font_info', {}))
+                    
+                    bbox = field.get('bbox', (0, 0, 0, 0))
+                    if not bbox or len(bbox) != 4:
+                        bbox = (0, 0, 0, 0)
+                    
+                    batch_data.append([
+                        field.get('doc_id', ''),
+                        field.get('field_name', 'Unknown'),
+                        field.get('value', ''),
+                        float(field.get('confidence', 0.50)),
+                        field.get('extraction_method', 'unknown'),
+                        int(field.get('page', 0)),
+                        float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]),
+                        field.get('context_type', 'unknown'),
+                        int(field.get('hierarchy_level', 0)),
+                        field.get('parent_field', ''),
+                        conditions_json,
+                        font_info_json
+                    ])
+                except Exception as e:
+                    logger.error(f"필드 데이터 준비 오류: {e}")
+                    continue
+            
+            if batch_data:
+                self.conn.executemany("""
+                    INSERT INTO extracted_fields (
+                        doc_id, field_name, field_value, confidence, extraction_method,
+                        page_number, bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+                        context_type, hierarchy_level, parent_field, conditions, font_info
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, batch_data)
+                
+                logger.info(f"필드 일괄 저장 완료: {len(batch_data)}개")
+        
+        except Exception as e:
+            logger.error(f"필드 일괄 저장 실패: {e}")
+    
+    def execute_query(self, query: str) -> pd.DataFrame:
+        """쿼리 실행"""
+        try:
+            return self.conn.execute(query).df()
+        except Exception as e:
+            logger.error(f"쿼리 실행 오류: {e}")
+            return pd.DataFrame()
+
+def process_files_maximum_extraction(uploaded_files, db, pdf_processor, comparison_system):
+    """최대 추출 파일 처리"""
+    st.header("🚀 최대 필드 추출 및 완전 비교 시스템")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    results_container = st.container()
+    
+    total_files = len(uploaded_files)
+    processed_results = []
+    
+    for i, uploaded_file in enumerate(uploaded_files):
+        try:
+            status_text.text(f"최대 추출 중: {uploaded_file.name} ({i+1}/{total_files})")
+            
+            file_size = len(uploaded_file.getvalue())
+            
+            # 🔧 최대 추출 실행
+            with st.spinner(f"'{uploaded_file.name}' 모든 필드 추출 중..."):
+                extraction_result = pdf_processor.extract_all_possible_fields(
+                    uploaded_file.getvalue(), 
+                    uploaded_file.name
+                )
+            
+            # 디버깅 정보 표시
+            debug_info = extraction_result.get('extraction_summary', {}).get('debug_info', {})
+            
+            with results_container:
+                if debug_info.get('fields_at_each_step'):
+                    st.write(f"**{uploaded_file.name} 최대 추출 결과:**")
+                    total_extracted = 0
+                    for step, count in debug_info['fields_at_each_step'].items():
+                        st.write(f"- {step}: {count} 필드")
+                        total_extracted += count
+                    st.write(f"- **총 추출: {total_extracted} 필드**")
+                
+                if debug_info.get('extraction_stats'):
+                    stats = debug_info['extraction_stats']
+                    st.write(f"- 최종 처리: {stats.get('total_final', 0)} 필드")
+                    st.write(f"- 필터링: {'비활성화' if not stats.get('filtering_applied', True) else '활성화'}")
+            
+            # 🔧 모든 필드 저장 (필터링 없음)
+            if extraction_result['extracted_fields']:
+                # 데이터베이스 저장
+                db.insert_document_with_metadata(
+                    extraction_result['doc_id'],
+                    uploaded_file.name,
+                    file_size,
+                    extraction_result
+                )
+                
+                db.insert_extracted_fields_batch(extraction_result['extracted_fields'])
+                
+                # 성공 기록
+                processed_results.append({
+                    'filename': uploaded_file.name,
+                    'status': 'success',
+                    'total_fields': len(extraction_result['extracted_fields']),
+                    'confidence': extraction_result['total_confidence'],
+                    'extraction_methods': len(extraction_result['extraction_summary']['extraction_methods_used'])
+                })
+                
+                st.success(f"✅ {uploaded_file.name}: {len(extraction_result['extracted_fields'])} 필드 추출 성공!")
+            else:
+                st.error(f"❌ {uploaded_file.name}: 필드 추출 실패")
+        
+        except Exception as e:
+            logger.error(f"파일 처리 오류 {uploaded_file.name}: {e}")
+            st.error(f"❌ {uploaded_file.name}: 처리 오류 - {str(e)}")
+        
+        finally:
+            progress_bar.progress((i + 1) / total_files)
+    
+    # 🔧 완전 비교 매트릭스 생성
+    if len(processed_results) >= 2:
+        with st.spinner("완전 비교 매트릭스 생성 중..."):
+            comparison_matrix = comparison_system.generate_complete_comparison_matrix()
+            if not comparison_matrix.empty:
+                comparison_system.save_comparison_results(comparison_matrix)
+                st.success("✅ 완전 비교 매트릭스 생성 완료!")
+    
+    # 최종 요약
+    status_text.text("✅ 최대 추출 및 비교 완료!")
+    
+    success_count = sum(1 for r in processed_results if r['status'] == 'success')
+    total_fields = sum(r.get('total_fields', 0) for r in processed_results if r['status'] == 'success')
+    
+    st.success(f"""
+    📊 **최대 추출 완료 요약**
+    - 성공: {success_count}/{total_files} 문서
+    - 총 추출 필드: {total_fields}개
+    - 필터링: 완전 비활성화
+    - 비교 시스템: 활성화
+    """)
+    
+    if processed_results:
+        results_df = pd.DataFrame(processed_results)
+        st.dataframe(results_df, use_container_width=True)
+
+# 메인 애플리케이션
+def main():
+    """메인 애플리케이션"""
+    
+    st.set_page_config(
+        page_title="Complete Field Extraction & Comparison System",
+        page_icon="",
+        layout="wide"
+    )
+    
+    st.markdown("""
+        <div style="padding: 1.5rem; text-align: center; margin-bottom: 2rem;">                   
+            <h1>Complete Field Extraction & Comparison System</h1>
+            <p><strong>모든 필드 추출 → 완전 비교 → DuckDB 저장</strong></p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # 세션 상태 초기화
+    try:
+        if 'db_manager' not in st.session_state:
+            st.session_state.db_manager = AdvancedDuckDBManager()
+        
+        if 'ontology_manager' not in st.session_state:
+            st.session_state.ontology_manager = ComprehensiveOntologyManager()
+        
+        if 'pdf_processor' not in st.session_state:
+            st.session_state.pdf_processor = MaximumExtractorProcessor(st.session_state.ontology_manager)
+        
+        if 'comparison_system' not in st.session_state:
+            st.session_state.comparison_system = CompleteComparisonSystem(st.session_state.db_manager)
+        
+        db = st.session_state.db_manager
+        pdf_processor = st.session_state.pdf_processor
+        comparison_system = st.session_state.comparison_system
+        
+    except Exception as e:
+        st.error(f"시스템 초기화 실패: {e}")
+        st.stop()
+    
+    # 사이드바
+    with st.sidebar:
+        st.header("📁 문서 업로드")
+        uploaded_files = st.file_uploader(
+            "PDF 파일 선택", 
+            type=['pdf'], 
+            accept_multiple_files=True,
+            help="모든 필드 추출 및 완전 비교"
+        )
+        
+        st.header("🚀 최대 추출 설정")
+        st.success("신뢰도 임계값: 0.15 (최저)")
+        st.success("필터링: 완전 비활성화")
+        st.success("모든 패턴: 활성화")
+        st.success("모든 페이지: 처리")
+        st.success("비교 매트릭스: 자동 생성")
+        
+        # 통계
+        try:
+            doc_count = db.execute_query("SELECT COUNT(*) as count FROM documents").iloc[0]['count']
+            field_count = db.execute_query("SELECT COUNT(*) as count FROM extracted_fields").iloc[0]['count']
+            unique_fields = db.execute_query("SELECT COUNT(DISTINCT field_name) as count FROM extracted_fields").iloc[0]['count']
+            comparison_count = db.execute_query("SELECT COUNT(*) as count FROM field_comparisons").iloc[0]['count']
+            
+            st.metric("문서 수", doc_count)
+            st.metric("총 필드", field_count)
+            st.metric("고유 필드", unique_fields)
+            st.metric("비교 매트릭스", comparison_count)
+        except:
+            st.metric("문서 수", 0)
+            st.metric("총 필드", 0)
+            st.metric("고유 필드", 0)
+            st.metric("비교 매트릭스", 0)
+    
+    # 탭 구성
+    tab1, tab2, tab3 = st.tabs(["📄 최대 추출", "🔍 완전 비교", "📊 데이터 분석"])
+    
+    with tab1:
+        # 파일 처리
+        if uploaded_files:
+            process_files_maximum_extraction(uploaded_files, db, pdf_processor, comparison_system)
+        
+        # 최근 추출 결과
+        try:
+            recent_extractions = db.execute_query("""
+                SELECT d.filename, ef.field_name, ef.field_value, ef.confidence, ef.extraction_method
+                FROM extracted_fields ef
+                JOIN documents d ON ef.doc_id = d.doc_id
+                ORDER BY ef.extraction_time DESC
+                LIMIT 100
+            """)
+            
+            if not recent_extractions.empty:
+                st.header("📋 최근 추출 결과 (상위 100개)")
+                st.dataframe(recent_extractions, use_container_width=True)
+            else:
+                st.info("추출된 데이터가 없습니다. PDF 파일을 업로드해주세요.")
+        
+        except Exception as e:
+            st.warning(f"데이터 로드 중 문제: {e}")
+    
+    with tab2:
+        st.header("🔍 완전 비교 매트릭스")
+        
+        try:
+            # 비교 매트릭스 표시
+            comparison_matrix = comparison_system.generate_complete_comparison_matrix()
+            
+            if not comparison_matrix.empty:
+                st.success(f"✅ 완전 비교 매트릭스: {len(comparison_matrix)} 필드")
+                
+                # 필터링 옵션
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    show_differences_only = st.checkbox("차이나는 필드만 표시", value=False)
+                
+                with col2:
+                    show_missing_only = st.checkbox("누락 필드만 표시", value=False)
+                
+                with col3:
+                    min_documents = st.slider("최소 문서 수", 1, 10, 1)
+                
+                # 필터링 적용
+                filtered_matrix = comparison_matrix.copy()
+                
+                if show_differences_only:
+                    filtered_matrix = filtered_matrix[filtered_matrix['Comparison_Result'].str.contains('🔴 값 차이', na=False)]
+                
+                if show_missing_only:
+                    filtered_matrix = filtered_matrix[filtered_matrix['Comparison_Result'].str.contains('🟡 1개 문서에만', na=False)]
+                
+                if min_documents > 1:
+                    filtered_matrix = filtered_matrix[filtered_matrix['Documents_With_Field'] >= min_documents]
+                
+                # 비교 결과 표시
+                if not filtered_matrix.empty:
+                    st.dataframe(
+                        filtered_matrix,
+                        use_container_width=True,
+                        column_config={
+                            'Comparison_Result': st.column_config.TextColumn(
+                                "비교 결과",
+                                width="medium"
+                            ),
+                            'Documents_With_Field': st.column_config.NumberColumn(
+                                "필드 보유 문서 수",
+                                format="%d"
+                            ),
+                            'Total_Documents': st.column_config.NumberColumn(
+                                "전체 문서 수",
+                                format="%d"
+                            )
+                        }
+                    )
+                    
+                    # 비교 통계
+                    st.subheader("📊 비교 통계")
+                    
+                    total_fields = len(filtered_matrix)
+                    identical_fields = len(filtered_matrix[filtered_matrix['Comparison_Result'].str.contains('🟢 모든 값 동일', na=False)])
+                    different_fields = len(filtered_matrix[filtered_matrix['Comparison_Result'].str.contains('🔴 값 차이', na=False)])
+                    partial_fields = len(filtered_matrix[filtered_matrix['Comparison_Result'].str.contains('🟡 1개 문서에만', na=False)])
+                    missing_fields = len(filtered_matrix[filtered_matrix['Comparison_Result'].str.contains('⚫ 모든 문서에서 없음', na=False)])
+                    
+                    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5 = st.columns(5)
+                    
+                    with stat_col1:
+                        st.metric("총 필드", total_fields)
+                    
+                    with stat_col2:
+                        st.metric("동일 필드", identical_fields, f"{identical_fields/total_fields*100:.1f}%" if total_fields > 0 else "0%")
+                    
+                    with stat_col3:
+                        st.metric("차이 필드", different_fields, f"{different_fields/total_fields*100:.1f}%" if total_fields > 0 else "0%")
+                    
+                    with stat_col4:
+                        st.metric("부분 필드", partial_fields, f"{partial_fields/total_fields*100:.1f}%" if total_fields > 0 else "0%")
+                    
+                    with stat_col5:
+                        st.metric("누락 필드", missing_fields, f"{missing_fields/total_fields*100:.1f}%" if total_fields > 0 else "0%")
+                    
+                    # 비교 결과 차트
+                    if total_fields > 0:
+                        comparison_stats = {
+                            '동일': identical_fields,
+                            '차이': different_fields, 
+                            '부분': partial_fields,
+                            '누락': missing_fields
+                        }
+                        
+                        fig = px.pie(
+                            values=list(comparison_stats.values()),
+                            names=list(comparison_stats.keys()),
+                            title="필드 비교 결과 분포",
+                            color_discrete_map={
+                                '동일': '#2ecc71',
+                                '차이': '#e74c3c',
+                                '부분': '#f39c12',
+                                '누락': '#34495e'
+                            }
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # CSV 다운로드
+                    csv = filtered_matrix.to_csv(index=False)
+                    st.download_button(
+                        label="📥 비교 매트릭스 CSV 다운로드",
+                        data=csv,
+                        file_name=f"field_comparison_matrix_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+                
+                else:
+                    st.warning("필터 조건에 맞는 필드가 없습니다.")
+            
+            else:
+                st.info("비교할 문서가 없습니다. 최소 2개 이상의 문서를 업로드해주세요.")
+        
+        except Exception as e:
+            st.error(f"비교 매트릭스 생성 오류: {e}")
+    
+    with tab3:
+        st.header("📊 추출 데이터 분석")
+        
+        try:
+            # 문서별 필드 수 분석
+            doc_field_stats = db.execute_query("""
+                SELECT 
+                    d.filename,
+                    d.total_fields,
+                    d.total_confidence,
+                    COUNT(DISTINCT ef.field_name) as unique_fields,
+                    COUNT(ef.id) as total_extracted_fields,
+                    AVG(ef.confidence) as avg_field_confidence,
+                    COUNT(CASE WHEN ef.confidence >= 0.70 THEN 1 END) as high_confidence_fields
+                FROM documents d
+                LEFT JOIN extracted_fields ef ON d.doc_id = ef.doc_id
+                GROUP BY d.doc_id, d.filename, d.total_fields, d.total_confidence
+                ORDER BY total_extracted_fields DESC
+            """)
+            
+            if not doc_field_stats.empty:
+                st.subheader("📄 문서별 필드 통계")
+                
+                # 문서별 필드 수 차트
+                fig1 = px.bar(
+                    doc_field_stats,
+                    x='filename',
+                    y='total_extracted_fields',
+                    title="문서별 추출된 필드 수",
+                    color='avg_field_confidence',
+                    color_continuous_scale='Viridis'
+                )
+                fig1.update_xaxes(tickangle=45)
+                st.plotly_chart(fig1, use_container_width=True)
+                
+                # 신뢰도 분포
+                fig2 = px.histogram(
+                    doc_field_stats,
+                    x='avg_field_confidence',
+                    nbins=20,
+                    title="문서별 평균 신뢰도 분포"
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+                
+                # 상세 통계 테이블
+                st.dataframe(
+                    doc_field_stats,
+                    use_container_width=True,
+                    column_config={
+                        'avg_field_confidence': st.column_config.ProgressColumn(
+                            "평균 신뢰도",
+                            format="%.3f",
+                            min_value=0.0,
+                            max_value=1.0
+                        ),
+                        'total_confidence': st.column_config.ProgressColumn(
+                            "문서 신뢰도",
+                            format="%.3f",
+                            min_value=0.0,
+                            max_value=1.0
+                        )
+                    }
+                )
+            
+            # 필드 타입별 분석
+            field_type_stats = db.execute_query("""
+                SELECT 
+                    field_name,
+                    COUNT(*) as occurrence_count,
+                    COUNT(DISTINCT doc_id) as document_count,
+                    AVG(confidence) as avg_confidence,
+                    MIN(confidence) as min_confidence,
+                    MAX(confidence) as max_confidence,
+                    STRING_AGG(DISTINCT extraction_method, ', ') as extraction_methods
+                FROM extracted_fields
+                GROUP BY field_name
+                HAVING COUNT(*) > 1
+                ORDER BY occurrence_count DESC
+                LIMIT 50
+            """)
+            
+            if not field_type_stats.empty:
+                st.subheader("🏷️ 필드 타입별 통계 (상위 50개)")
+                
+                # 필드별 출현 빈도
+                fig3 = px.bar(
+                    field_type_stats.head(20),
+                    x='field_name',
+                    y='occurrence_count',
+                    title="필드별 출현 빈도 (상위 20개)",
+                    color='avg_confidence',
+                    color_continuous_scale='RdYlGn'
+                )
+                fig3.update_xaxes(tickangle=45)
+                st.plotly_chart(fig3, use_container_width=True)
+                
+                # 필드별 문서 커버리지
+                fig4 = px.scatter(
+                    field_type_stats,
+                    x='document_count',
+                    y='avg_confidence',
+                    size='occurrence_count',
+                    hover_data=['field_name'],
+                    title="필드별 문서 커버리지 vs 평균 신뢰도"
+                )
+                st.plotly_chart(fig4, use_container_width=True)
+                
+                # 상세 테이블
+                st.dataframe(
+                    field_type_stats,
+                    use_container_width=True,
+                    column_config={
+                        'avg_confidence': st.column_config.ProgressColumn(
+                            "평균 신뢰도",
+                            format="%.3f",
+                            min_value=0.0,
+                            max_value=1.0
+                        ),
+                        'min_confidence': st.column_config.ProgressColumn(
+                            "최소 신뢰도",
+                            format="%.3f",
+                            min_value=0.0,
+                            max_value=1.0
+                        ),
+                        'max_confidence': st.column_config.ProgressColumn(
+                            "최대 신뢰도",
+                            format="%.3f",
+                            min_value=0.0,
+                            max_value=1.0
+                        )
+                    }
+                )
+            
+            # 추출 방법별 성능 분석
+            method_stats = db.execute_query("""
+                SELECT 
+                    extraction_method,
+                    context_type,
+                    COUNT(*) as field_count,
+                    AVG(confidence) as avg_confidence,
+                    COUNT(DISTINCT field_name) as unique_fields,
+                    COUNT(DISTINCT doc_id) as document_coverage
+                FROM extracted_fields
+                GROUP BY extraction_method, context_type
+                ORDER BY field_count DESC
+            """)
+            
+            if not method_stats.empty:
+                st.subheader("🔧 추출 방법별 성능")
+                
+                # 방법별 필드 수
+                fig5 = px.treemap(
+                    method_stats,
+                    path=['extraction_method', 'context_type'],
+                    values='field_count',
+                    color='avg_confidence',
+                    title="추출 방법별 필드 수 및 신뢰도"
+                )
+                st.plotly_chart(fig5, use_container_width=True)
+                
+                # 성능 비교 테이블
+                st.dataframe(
+                    method_stats,
+                    use_container_width=True,
+                    column_config={
+                        'avg_confidence': st.column_config.ProgressColumn(
+                            "평균 신뢰도",
+                            format="%.3f",
+                            min_value=0.0,
+                            max_value=1.0
+                        )
+                    }
+                )
+        
+        except Exception as e:
+            st.error(f"데이터 분석 오류: {e}")
+    
+    # 하단 정보
+    st.markdown("---")
+    st.markdown("""
+        <div style="text-align: center; color: #7f8c8d;">
+            <p><strong>Complete Field Extraction & Comparison System</strong></p>
+            <p>Yonsei University</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()

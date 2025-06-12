@@ -1,0 +1,184 @@
+이 시스템은 플랜트 엔지니어링 문서에서 완전한 필드 추출과 비교를 수행하는 포괄적인 문서 분석 파이프라인입니다. 다음과 같은 기술적 프로세스로 구성되어 있습니다:
+1. 아키텍처 설계 원칙
+1.1 최대 추출 전략 (Maximum Extraction Strategy)
+
+필터링 완전 제거: 기존 시스템의 신뢰도 임계값 기반 필터링을 비활성화
+신뢰도 하한선 설정: 0.15로 매우 낮은 임계값 적용하여 모든 가능한 필드 포함
+포괄적 패턴 매칭: 19개의 정규표현식 패턴을 통한 다층적 추출
+
+1.2 온톨로지 기반 정규화
+python# 77개 필드 타입에 대한 포괄적 매핑
+field_patterns = {
+    'pump_type': ['pump type', 'pump', 'type of pump', 'pump typ'],
+    'liquid_name': ['liquid name', 'fluid', 'fluid name', 'liquid', 'medium'],
+    # ... 총 77개 필드 타입
+}
+2. 다층적 추출 프로세스
+2.1 공간적 추출 (Spatial Extraction)
+
+pdfplumber 기반 위치 정보 추출
+모든 페이지의 단어별 좌표(bbox) 수집
+19개 정규표현식 패턴을 각 페이지에 적용
+단어 쌍(word pairs) 기반 키-값 관계 추론
+
+2.2 테이블 구조 추출 (Table Structure Extraction)
+pythondef _extract_all_table_fields(self, file_content):
+    # 모든 테이블의 모든 행을 헤더로 시도
+    for header_idx in range(min(len(table), 3)):
+        # 모든 셀 조합을 키-값 쌍으로 매핑
+        for col_idx in range(min(len(header_row), len(row))):
+2.3 텍스트 라인 분석 (Text Line Analysis)
+
+콜론(:) 기반 키-값 분리
+개별 텍스트 라인을 독립적 필드로 처리
+최소 길이 검증만 적용 (2자 이상)
+
+2.4 패턴 기반 추출 (Pattern-Based Extraction)
+특수 도메인 패턴 정의:
+pythonspecial_patterns = {
+    'feed_types': r'(AM\s+FEED|AH\s+FEED|AM_FEED|AH_FEED)',
+    'api_classes': r'(API\s+CLASS\s+[A-Z0-9\-]+)',
+    'units': r'(\d+\.?\d*)\s*([A-Za-z°/%]+)',
+    'pressures': r'(\d+\.?\d*)\s*(PSI|BAR|kg/cm2)',
+}
+2.5 의미적 단어 추출 (Semantic Word Extraction)
+
+대문자 단어 패턴 추출: \b[A-Z]{2,}[A-Z0-9\-]*\b
+빈도 기반 중요도 계산
+상위 100개 의미적 단어를 필드로 변환
+
+3. 데이터 구조 및 컨텍스트 관리
+3.1 FieldContext 데이터 클래스
+python@dataclass
+class FieldContext:
+    field_name: str
+    value: Any
+    bbox: Tuple[float, float, float, float]  # 공간 좌표
+    page: int
+    confidence: float
+    context_type: str                        # 추출 방법 분류
+    extraction_method: str
+    parent_field: Optional[str] = None       # 계층 구조
+    hierarchy_level: int = 0
+    font_info: Optional[Dict] = None         # 폰트 메타데이터
+3.2 신뢰도 계산 알고리즘
+pythondef _calculate_base_confidence(self, method: str) -> float:
+    base_confidences = {
+        'spatial': 0.60,    # 공간적 위치 기반
+        'table': 0.70,      # 구조화된 테이블
+        'text': 0.50,       # 일반 텍스트
+        'pattern': 0.65,    # 정규표현식 매칭
+        'word': 0.40        # 단어 기반 추출
+    }
+4. 완전 비교 매트릭스 생성
+4.1 교차 참조 매트릭스
+sqlSELECT 
+    d.filename,
+    ef.field_name,
+    ef.field_value,
+    ef.confidence
+FROM extracted_fields ef
+JOIN documents d ON ef.doc_id = d.doc_id
+ORDER BY ef.field_name, d.filename
+4.2 비교 결과 분류
+
+🟢 모든 값 동일: 모든 문서에서 동일한 값
+🔴 값 차이: 문서간 값이 상이함
+🟡 1개 문서에만 있음: 부분적 존재
+⚫ 모든 문서에서 없음: 완전 누락
+
+5. 데이터베이스 스키마 설계
+5.1 정규화된 관계형 구조
+sql-- 문서 메타데이터
+CREATE TABLE documents (
+    doc_id VARCHAR PRIMARY KEY,
+    filename VARCHAR NOT NULL,
+    total_confidence DECIMAL(4,3),
+    metadata JSON
+);
+
+-- 추출된 필드 (비정규화)
+CREATE TABLE extracted_fields (
+    id INTEGER PRIMARY KEY,
+    doc_id VARCHAR,
+    field_name VARCHAR NOT NULL,
+    field_value TEXT,
+    confidence DECIMAL(5,4),
+    bbox_x1, bbox_y1, bbox_x2, bbox_y2 DECIMAL(10,3),
+    extraction_method VARCHAR,
+    context_type VARCHAR
+);
+
+-- 비교 결과 캐시
+CREATE TABLE field_comparisons (
+    field_name VARCHAR,
+    comparison_result VARCHAR,
+    documents_with_field INTEGER,
+    comparison_data JSON
+);
+6. 성능 최적화 전략
+6.1 메모리 효율성
+
+스트리밍 처리: io.BytesIO를 통한 메모리 기반 PDF 처리
+배치 삽입: executemany()를 통한 대량 데이터 처리
+인덱스 최적화: 필드명과 문서ID에 대한 복합 인덱스
+
+6.2 예외 처리 및 복구
+pythondef _create_minimal_error_result(self, filename: str, error_msg: str):
+    return {
+        'doc_id': f"error_{hashlib.md5(filename.encode()).hexdigest()[:8]}",
+        'extracted_fields': [],
+        'metadata': {'error': error_msg},
+        'total_confidence': 0.0
+    }
+7. 시각화 및 분석 레이어
+7.1 실시간 대시보드
+
+Plotly 기반 인터랙티브 차트
+Streamlit 기반 반응형 웹 인터페이스
+필터링 가능한 비교 매트릭스 테이블
+
+7.2 통계 분석
+
+문서별 필드 커버리지 분석
+추출 방법별 성능 벤치마킹
+신뢰도 분포 히스토그램
+
+8. 확장성 및 유지보수성
+8.1 모듈화 설계
+
+ComprehensiveOntologyManager: 도메인 지식 관리
+MaximumExtractorProcessor: 추출 엔진
+CompleteComparisonSystem: 비교 분석 엔진
+AdvancedDuckDBManager: 데이터 영속성
+
+8.2 구성 가능한 파라미터
+pythonself.confidence_threshold = 0.15    # 조정 가능한 임계값
+self.enable_filtering = False       # 필터링 토글
+self.all_patterns = [...]          # 확장 가능한 패턴 리스트
+이 시스템의 핵심 혁신은 "완전성 우선" 접근법으로, 전통적인 정확도 기반 필터링을 포기하고 모든 가능한 정보를 추출한 후 사후 비교를 통해 데이터 품질을 평가
+
+
+db 저장
+all_fields_query = """
+    SELECT 
+        d.filename,
+        ef.field_name,
+        ef.field_value,
+        ef.confidence,
+        ef.extraction_method,
+        ef.context_type
+    FROM extracted_fields ef
+    JOIN documents d ON ef.doc_id = d.doc_id
+    ORDER BY ef.field_name, d.filename
+"""
+all_fields_df = self.db.execute_query(all_fields_query)
+
+6. 파일 저장 위치
+
+기본 경로: plant_documents.db (로컬 파일)
+메모리 폴백: 연결 실패시 :memory: 사용
+영속성: 세션 종료 후에도 데이터 유지
+
+이 방식의 핵심은 DuckDB의 "분석용 임베디드 데이터베이스" 특성을 활용하여, 복잡한 문서 비교 분석을 SQL로 수행하면서도 Python/Pandas 생태계와 완벽하게 통합
+

@@ -1,0 +1,25 @@
+# API 키와 민감한 정보
+.streamlit/secrets.toml
+*.env
+.env
+config.py
+api_keys.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# 데이터베이스
+*.db
+*.sqlite3
+
+# 로그
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
