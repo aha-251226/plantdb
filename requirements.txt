@@ -1,5 +1,9 @@
 dash
+dash-bootstrap-components
 plotly
 pandas
 numpy
+duckdb
+pdfplumber
+python-dotenv
 gunicorn
