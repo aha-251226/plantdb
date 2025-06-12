@@ -1,9 +1,7 @@
-dash
-dash-bootstrap-components
+streamlit
 plotly
-pandas
 numpy
+pandas
 duckdb
 pdfplumber
 python-dotenv
-gunicorn
