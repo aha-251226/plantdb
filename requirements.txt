@@ -1,0 +1,9 @@
+streamlit
+plotly
+numpy
+pandas
+duckdb
+pdfplumber
+PyMuPDF
+python-rapidfuzz
+pathlib
