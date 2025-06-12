@@ -1463,7 +1463,7 @@ class CompleteComparisonSystem:
           
           if not words1 and not words2:
               return 1.0
-intersection = len(words1 & words2)
+          intersection = len(words1 & words2)
           union = len(words1 | words2)
           
           return intersection / union if union > 0 else 0.0
