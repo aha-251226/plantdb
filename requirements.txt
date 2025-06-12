@@ -1,8 +1,5 @@
-streamlit
+dash
 plotly
-numpy
 pandas
-duckdb
-pdfplumber
-PyMuPDF==1.24.12
-rapidfuzz
+numpy
+gunicorn
