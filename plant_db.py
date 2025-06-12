@@ -1,6 +1,5 @@
 # 완전한 필드 추출기 - 모든 필드 비교 시스템
 # 핵심: 모든 필드 강제 추출, 필터링 없음, 완전 비교
-
 import streamlit as st
 import duckdb
 import pandas as pd
@@ -11,6 +10,7 @@ import os
 import io
 import re
 import hashlib
+import uuid  # 🆕 사용자별 고유 ID 생성용
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Set
 import numpy as np
