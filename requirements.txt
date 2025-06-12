@@ -4,6 +4,5 @@ numpy
 pandas
 duckdb
 pdfplumber
-PyMuPDF
-python-rapidfuzz
-pathlib
+PyMuPDF==1.24.12
+rapidfuzz
